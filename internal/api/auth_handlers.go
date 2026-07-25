@@ -16,8 +16,12 @@ import (
 // The built-in symptom catalog used to be seeded here. Under end-to-end
 // encryption the server cannot create records: it has no key, so anything it
 // wrote would be unreadable by the client and would corrupt the change log.
-// The client now seeds its own catalog and pushes it sealed, which is also why
-// symptom definitions no longer need a server-side canonical vocabulary.
+//
+// Nothing replaces it server-side, and nothing needs to: the client renders its
+// own catalog (Symptom.DEFAULT_SYMPTOMS) and symptom definitions are not part
+// of the synced slice today. If they are added later they arrive sealed, like
+// any other record, and the client reconciles them (SymptomCatalogAdopter).
+// There is no longer a server-side canonical vocabulary, by construction.
 
 type registerRequest struct {
 	DeviceName string `json:"device_name"`
@@ -112,7 +116,13 @@ type addDeviceRequest struct {
 }
 
 type addDeviceResponse struct {
-	Device deviceTokenResponse `json:"device"`
+	// The account id is returned alongside the device because the client needs
+	// it to derive its encryption keys (it is the HKDF salt, see the client's
+	// E2EE_DESIGN.md section 3). It is not a secret, and the caller has just
+	// proved possession of the account code to reach this point. Returning it
+	// here saves a follow-up /v1/me round trip during recovery.
+	AccountID string              `json:"account_id"`
+	Device    deviceTokenResponse `json:"device"`
 }
 
 // HandleAddDevice registers an additional device using the account code.
@@ -150,7 +160,8 @@ func (d *Deps) HandleAddDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, addDeviceResponse{
-		Device: deviceTokenResponse{ID: deviceID, Name: name, Token: token},
+		AccountID: account.ID,
+		Device:    deviceTokenResponse{ID: deviceID, Name: name, Token: token},
 	})
 }
 

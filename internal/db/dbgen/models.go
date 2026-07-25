@@ -9,12 +9,11 @@ import (
 )
 
 type Account struct {
-	ID           string `json:"id"`
-	CodeHash     []byte `json:"code_hash"`
-	Status       string `json:"status"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
-	DuoPublicKey []byte `json:"duo_public_key"`
+	ID        string `json:"id"`
+	CodeHash  []byte `json:"code_hash"`
+	Status    string `json:"status"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type AccountSetting struct {

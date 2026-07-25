@@ -164,8 +164,14 @@ paths:
             application/json:
               schema:
                 type: object
-                required: [device]
+                required: [account_id, device]
                 properties:
+                  account_id:
+                    allOf: [{ $ref: "#/components/schemas/UUID" }]
+                    description: |
+                      Needed by the client to derive its encryption keys (HKDF
+                      salt). Not a secret, and the caller has just proved
+                      possession of the account code to reach this point.
                   device: { $ref: "#/components/schemas/NewDevice" }
         "401": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/Problem" }
@@ -977,6 +983,16 @@ components:
           nullable: true
           description: Sealed projection; null until the tracker publishes one
         payload_updated_at: { type: string, format: date-time, nullable: true }
+        grants:
+          type: array
+          description: |
+            Currently active grant fields. These are names of shared categories,
+            not observations, so they stay in the clear: the server already
+            records them via PATCH /v1/duo/links/{linkID}/grants and needs them
+            for audit. The tracker's device reads them back to know what to seal
+            into the next projection, which is why they cannot live only in the
+            encrypted payload.
+          items: { $ref: "#/components/schemas/GrantField" }
         support_requests:
           type: array
           nullable: true

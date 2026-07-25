@@ -96,10 +96,12 @@ CREATE TABLE account_settings (
 -- one: a grant now decides what is ever encrypted and transmitted, so the
 -- server cannot leak what it never received.
 
--- X25519 identity key per account, published at registration. Duo link keys
--- come from ECDH between the two parties, then HKDF. The 50-bit pairing code
--- authenticates the link; it is far too small to be the key itself.
-ALTER TABLE accounts ADD COLUMN duo_public_key BLOB;
+-- No key material is stored here. The Duo link key is generated on the
+-- tracker's device and travels to the partner in the pairing URL fragment,
+-- which is never sent to a server (see the client's E2EE_DESIGN.md section 5).
+-- A server-brokered key exchange was considered and rejected: it would let a
+-- malicious operator substitute its own keys, and closing that needs the same
+-- out-of-band channel the pairing link already provides.
 
 CREATE TABLE duo_payloads (
     link_id    TEXT PRIMARY KEY REFERENCES duo_links(id) ON DELETE CASCADE,

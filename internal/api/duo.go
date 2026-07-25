@@ -248,8 +248,12 @@ type duoView struct {
 	AsOf   string `json:"as_of"`
 	// Sealed by the tracker's device under the Duo link key. The server
 	// relays it and cannot read it. Null until the tracker has published one.
-	Payload         []byte                `json:"payload"`
-	PayloadUpdatedAt *string              `json:"payload_updated_at"`
+	Payload          []byte   `json:"payload"`
+	PayloadUpdatedAt *string  `json:"payload_updated_at"`
+	// Active grant field names. Category names, not observations, so they stay
+	// readable: the tracker's device reads them back to know what to seal into
+	// the next projection.
+	Grants           []string `json:"grants"`
 	SupportRequests *[]supportRequestView `json:"support_requests"`
 }
 
@@ -283,7 +287,22 @@ func (d *Deps) HandleDuoView(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	view := duoView{LinkID: link.ID, Role: role, AsOf: now.Format(time.RFC3339)}
+	view := duoView{
+		LinkID: link.ID,
+		Role:   role,
+		AsOf:   now.Format(time.RFC3339),
+		Grants: []string{},
+	}
+
+	grants, err := d.Q.ListActiveGrantsByLink(ctx, link.ID)
+	if err != nil {
+		d.Log.Error("grant list failed", "err", err)
+		problem.Write(w, r, problem.Internal())
+		return
+	}
+	for _, g := range grants {
+		view.Grants = append(view.Grants, g.Field)
+	}
 
 	if payload, err := d.Q.GetDuoPayload(ctx, link.ID); err == nil {
 		view.Payload = payload.Ciphertext

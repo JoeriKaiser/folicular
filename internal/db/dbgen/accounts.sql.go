@@ -19,7 +19,7 @@ func (q *Queries) DeleteAccount(ctx context.Context, id string) error {
 }
 
 const getAccountByCodeHash = `-- name: GetAccountByCodeHash :one
-SELECT id, code_hash, status, created_at, updated_at, duo_public_key FROM accounts WHERE code_hash = ?
+SELECT id, code_hash, status, created_at, updated_at FROM accounts WHERE code_hash = ?
 `
 
 func (q *Queries) GetAccountByCodeHash(ctx context.Context, codeHash []byte) (Account, error) {
@@ -31,13 +31,12 @@ func (q *Queries) GetAccountByCodeHash(ctx context.Context, codeHash []byte) (Ac
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.DuoPublicKey,
 	)
 	return i, err
 }
 
 const getAccountByID = `-- name: GetAccountByID :one
-SELECT id, code_hash, status, created_at, updated_at, duo_public_key FROM accounts WHERE id = ?
+SELECT id, code_hash, status, created_at, updated_at FROM accounts WHERE id = ?
 `
 
 func (q *Queries) GetAccountByID(ctx context.Context, id string) (Account, error) {
@@ -49,46 +48,28 @@ func (q *Queries) GetAccountByID(ctx context.Context, id string) (Account, error
 		&i.Status,
 		&i.CreatedAt,
 		&i.UpdatedAt,
-		&i.DuoPublicKey,
 	)
 	return i, err
 }
 
 const insertAccount = `-- name: InsertAccount :exec
-INSERT INTO accounts (id, code_hash, status, duo_public_key, created_at, updated_at)
-VALUES (?, ?, 'active', ?, ?, ?)
+INSERT INTO accounts (id, code_hash, status, created_at, updated_at)
+VALUES (?, ?, 'active', ?, ?)
 `
 
 type InsertAccountParams struct {
-	ID           string `json:"id"`
-	CodeHash     []byte `json:"code_hash"`
-	DuoPublicKey []byte `json:"duo_public_key"`
-	CreatedAt    string `json:"created_at"`
-	UpdatedAt    string `json:"updated_at"`
+	ID        string `json:"id"`
+	CodeHash  []byte `json:"code_hash"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 func (q *Queries) InsertAccount(ctx context.Context, arg InsertAccountParams) error {
 	_, err := q.db.ExecContext(ctx, insertAccount,
 		arg.ID,
 		arg.CodeHash,
-		arg.DuoPublicKey,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
-	return err
-}
-
-const setDuoPublicKey = `-- name: SetDuoPublicKey :exec
-UPDATE accounts SET duo_public_key = ?, updated_at = ? WHERE id = ?
-`
-
-type SetDuoPublicKeyParams struct {
-	DuoPublicKey []byte `json:"duo_public_key"`
-	UpdatedAt    string `json:"updated_at"`
-	ID           string `json:"id"`
-}
-
-func (q *Queries) SetDuoPublicKey(ctx context.Context, arg SetDuoPublicKeyParams) error {
-	_, err := q.db.ExecContext(ctx, setDuoPublicKey, arg.DuoPublicKey, arg.UpdatedAt, arg.ID)
 	return err
 }
