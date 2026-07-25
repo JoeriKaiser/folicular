@@ -12,13 +12,38 @@ Play). This matters for the security posture below — see
 
 ## Threat-aware baseline
 
-Menstrual and symptom data are health data (S30, CNIL). The v1 storage model
-trusts the server (see `architecture.md`), so the deployment must:
+Menstrual and symptom data are health data (S30, CNIL). **Record content is
+end-to-end encrypted**: clients seal it with a key derived from the account
+code, and this server stores ciphertext plus routing metadata only. It holds no
+key and cannot decrypt anything, by construction. See the client repository's
+`docs/architecture/E2EE_DESIGN.md`.
+
+That changes the operational posture in three ways worth internalising before
+you deploy:
+
+- **A database breach yields ciphertext.** Under GDPR Art. 34 that generally
+  makes a leak non-notifiable to users, because the data is unintelligible
+  without keys you never held. This is the single biggest security property of
+  the deployment, and it is a property of the design, not the hosting.
+- **Backups are far less sensitive** than they used to be — they are encrypted
+  at the record level before they ever reach the disk.
+- **You cannot help a user recover data.** The account code is the only key.
+  If a user loses it, their synced history is permanently unreadable and there
+  is no support path. Say so in onboarding, not after the fact.
+
+What the server still sees, and therefore what the deployment must still
+protect: account existence, device count, the Duo link graph, request timing
+and volume, and client IPs. Sync traffic volume alone reveals roughly *when*
+someone logs, even though it cannot reveal *what*.
+
+The deployment must:
 
 - terminate TLS everywhere (never serve plain HTTP) — Coolify's proxy does this,
-- encrypt the disk or volume at rest (LUKS, or a provider encrypted volume),
+- encrypt the disk or volume at rest (LUKS, or a provider encrypted volume) —
+  now defence in depth over the metadata rather than the last line of defence,
 - host in the EU (e.g. OVH, Hetzner),
-- log no record contents, codes, or tokens (the server already does this),
+- log no codes or tokens, and no client IPs (the server already does this;
+  rate-limit keys are HMAC'd under a per-process pepper),
 - allow complete deletion (account cascade deletes exist),
 - run exactly **one** instance (SQLite is single-writer; do not scale replicas).
 
@@ -42,11 +67,19 @@ Create the app as **Project → + New Resource → Application → Git Repositor
 | Setting | Value |
 |---|---|
 | Build Pack | **Dockerfile** |
-| Repository / Branch | this repo, the release branch or tag |
+| Repository / Branch | this repo, `main` (or a release tag) |
 | Base Directory | `/` |
 | Dockerfile Location | `/Dockerfile` |
 | Domain | `https://luteal-api.waldemar.site` |
 | Ports Exposes | `8080` (the container's internal listening port) |
+
+If you prefer Coolify's **Docker Compose** build pack instead, point it at
+`docker-compose.prod.yml`. That file uses `expose` rather than `ports` (so the
+service stays on the internal network behind the proxy instead of being
+published on a host port), omits `container_name` so redeploys do not collide,
+and fails fast when `FOLICULAR_INVITE_CODES` or `FOLICULAR_TRUSTED_PROXIES` are
+unset. The root `docker-compose.yml` is for local development only and must not
+be used on the VPS.
 
 The multi-stage `Dockerfile` produces a static, CGO-free binary, runs as a
 non-root user (uid 10001), and already declares `EXPOSE 8080` plus a
@@ -156,12 +189,15 @@ backup.
 The client is distributed via F-Droid only. That shapes what "locking the API
 down" can and cannot mean.
 
-**The hard boundary is authentication, and it already exists.** Every data
-endpoint (`/me`, `/sync/*`, `/cycles`, `/duo/*`) sits behind
-`internal/auth/middleware.go`: a valid, non-revoked device bearer token
+**There are now two boundaries, and the stronger one is cryptographic.** Record
+content is encrypted client-side, so even a stranger who obtained a valid token
+— or the database itself — reads ciphertext. Authentication is the second
+boundary: every data endpoint (`/me`, `/sync/*`, `/duo/*`) sits behind
+`internal/auth/middleware.go` with a valid, non-revoked device bearer token
 (SHA-256 hashed, indexed lookup, no user enumeration, revocation and
 account-status checks). A stranger who discovers the domain and hits
-`/v1/sync/pull` gets `401`. The data is not open.
+`/v1/sync/pull` gets `401`. The plaintext read endpoints `/cycles` and `/days`
+no longer exist; they required reading record content.
 
 **"Only the app binary may call the API" is not enforceable.** The app runs on
 a device the user controls; an APK is decompilable and its traffic observable.

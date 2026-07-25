@@ -1,4 +1,9 @@
-# Local development / real-device trial for the folicular backend.
+# LOCAL DEVELOPMENT ONLY - not a production deployment.
+#
+# This publishes the API on a host port with no TLS and no invite gate, which
+# is right for a laptop and wrong for a VPS. For Coolify use the Dockerfile
+# build pack (see docs/deployment.md), or docker-compose.prod.yml if you deploy
+# with the Docker Compose build pack.
 #
 #   docker compose up -d --build        # build the image and start
 #   docker compose logs -f folicular    # follow the structured JSON logs

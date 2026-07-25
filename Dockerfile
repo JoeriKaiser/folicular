@@ -24,7 +24,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
 
 # --- runtime stage ---------------------------------------------------------
 FROM alpine:3.20
-# Fixed uid/gid so the named volume ownership is deterministic.
+ARG VERSION=docker
+LABEL org.opencontainers.image.title="folicular" \
+      org.opencontainers.image.description="Encrypted sync backend for the Luteal cycle tracker" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+
+# Fixed uid/gid so volume ownership is deterministic across redeploys. A fresh
+# named volume inherits this ownership from the image; a HOST BIND MOUNT does
+# not, and will be root-owned and unwritable. Use a Volume in Coolify, not a
+# bind mount (see docs/deployment.md).
 RUN addgroup -g 10001 luteal && adduser -S -u 10001 -G luteal luteal \
     && mkdir -p /data && chown -R 10001:10001 /data
 WORKDIR /data
@@ -34,7 +43,11 @@ ENV FOLICULAR_ADDR=:8080 \
     FOLICULAR_DB_PATH=/data/folicular.db \
     FOLICULAR_LOG_LEVEL=info
 EXPOSE 8080
+
 # busybox wget ships with Alpine; /healthz is a no-DB liveness probe.
+# The port is read from FOLICULAR_ADDR so overriding it does not silently
+# leave the container reporting unhealthy forever.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=5s --retries=5 \
-    CMD wget -qO- http://127.0.0.1:8080/healthz >/dev/null 2>&1 || exit 1
+    CMD wget -qO- "http://127.0.0.1${FOLICULAR_ADDR:-:8080}/healthz" >/dev/null 2>&1 || exit 1
+
 ENTRYPOINT ["/usr/local/bin/folicular"]

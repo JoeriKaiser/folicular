@@ -1,0 +1,80 @@
+# Production compose for Coolify.
+#
+# Use this ONLY if you deploy with Coolify's "Docker Compose" build pack. If you
+# use the "Dockerfile" build pack (the default recommended in
+# docs/deployment.md), Coolify builds the image itself and this file is not
+# read - set the same environment variables in the application's UI instead.
+#
+# Differences from the local-development docker-compose.yml, all of which
+# matter behind a reverse proxy:
+#
+#   - `expose` instead of `ports`: the service is reachable on the internal
+#     Docker network for the Coolify proxy to route to, and is NOT published on
+#     the host. Publishing to the host would bypass TLS termination and expose
+#     the API directly on a public port.
+#   - no `container_name`: Coolify manages naming, and a fixed name collides on
+#     redeploy.
+#   - resource limits, so one runaway process cannot take the VPS down.
+#   - every security-relevant variable is listed explicitly, including the two
+#     that are dangerous to forget (see below).
+#
+# SQLite is single-writer: run exactly ONE replica. Never scale this service.
+
+services:
+  folicular:
+    build:
+      context: .
+      args:
+        # Coolify substitutes the commit SHA; falls back for manual builds.
+        VERSION: ${SOURCE_COMMIT:-prod}
+    restart: unless-stopped
+
+    environment:
+      FOLICULAR_ADDR: ":8080"
+      # Must sit on the persistent volume below, or every redeploy wipes it.
+      FOLICULAR_DB_PATH: /data/folicular.db
+      FOLICULAR_LOG_LEVEL: ${FOLICULAR_LOG_LEVEL:-info}
+
+      # Public base for Duo pairing links. Must match the domain the Android
+      # app treats as its App Link target, or shared links will not open.
+      FOLICULAR_PAIRING_BASE_URL: ${FOLICULAR_PAIRING_BASE_URL:?set the Duo pairing base URL}
+
+      # REQUIRED IN PRODUCTION. Empty leaves account registration OPEN to
+      # anyone who finds the domain. The server logs a warning at boot when
+      # unset; this makes it a hard failure instead.
+      FOLICULAR_INVITE_CODES: ${FOLICULAR_INVITE_CODES:?set at least one invite code}
+
+      # REQUIRED BEHIND A PROXY. Without it every request appears to originate
+      # from the proxy, so per-IP rate limiting buckets all users together and
+      # one abusive client throttles everybody. Set to the network the Coolify
+      # proxy connects from (commonly 172.16.0.0/12 on Docker).
+      FOLICULAR_TRUSTED_PROXIES: ${FOLICULAR_TRUSTED_PROXIES:?set the proxy network CIDR}
+
+    # Internal only: the Coolify proxy routes to this port and terminates TLS.
+    expose:
+      - "8080"
+
+    volumes:
+      - folicular-data:/data
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/readyz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  folicular-data:
