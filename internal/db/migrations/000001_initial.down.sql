@@ -1,0 +1,14 @@
+DROP TABLE IF EXISTS support_requests;
+DROP TABLE IF EXISTS duo_grants;
+DROP TABLE IF EXISTS duo_links;
+DROP TABLE IF EXISTS sync_changes;
+DROP TABLE IF EXISTS medication_logs;
+DROP TABLE IF EXISTS biomarker_observations;
+DROP TABLE IF EXISTS symptom_logs;
+DROP TABLE IF EXISTS symptom_definitions;
+DROP TABLE IF EXISTS daily_entries;
+DROP TABLE IF EXISTS bleeding_observations;
+DROP TABLE IF EXISTS cycles;
+DROP TABLE IF EXISTS account_settings;
+DROP TABLE IF EXISTS devices;
+DROP TABLE IF EXISTS accounts;

@@ -1,0 +1,15 @@
+{
+  "name": "predictions",
+  "method": "GET",
+  "path": "/v1/predictions/current",
+  "status": 200,
+  "body": {
+    "generated_at": "2026-07-21T14:03:00Z",
+    "method": "cycle_length_median_v1",
+    "basis": { "cycle_count": 6, "median_length_days": 29, "variability_days": 4 },
+    "next_menstruation": { "window_start": "2026-07-27", "central_date": "2026-07-29", "window_end": "2026-07-31", "confidence": "moderate" },
+    "ovulation_estimate": { "window_start": "2026-07-12", "central_date": "2026-07-16", "window_end": "2026-07-19", "confidence": "low" },
+    "fertile_window_estimate": { "window_start": "2026-07-07", "window_end": "2026-07-17", "confidence": "low" },
+    "disclaimer": "Estimations fondees sur vos cycles enregistres. Ce ne sont pas des previsions certaines ni un avis medical."
+  }
+}

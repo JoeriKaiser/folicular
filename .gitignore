@@ -1,0 +1,14 @@
+# Binaries
+/bin/
+/folicular
+
+# Local database files
+*.db
+*.db-wal
+*.db-shm
+
+# Local data and environment
+/data/
+.env
+.env.*
+!.env.example

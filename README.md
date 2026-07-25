@@ -1,0 +1,107 @@
+# folicular
+
+Backend service for **Luteal**, the French-first, private menstrual cycle tracker
+and consensual Duo companion. folicular provides anonymous account identity,
+offline-first delta synchronization for the Android client, server-authoritative
+validation, and clearly labeled cycle estimates.
+
+Status: **design phase**. The API contract, research-backed data model, and a
+compiling skeleton exist; nothing here is production-hardened yet.
+
+## Principles
+
+- **The backend is the source of truth for data.** Canonical schema, validation
+  rules, conflict resolution, and computed estimates live here. Clients may
+  cache for offline display but must conform to this contract.
+- **Observations are not diagnoses.** The server stores self-reported
+  observations and serves estimates with explicit uncertainty. It never
+  screens for, infers, or announces a medical condition.
+- **Anonymous by design.** No email, no OAuth, no phone number. An account is a
+  high-entropy code (Mullvad-style) plus per-device tokens.
+- **French first.** Server-authored copy and default locale are French.
+- **Research-backed structure.** Every domain constant and enum traces to a
+  source in `docs/research/SOURCES.md`.
+
+## Stack
+
+| Concern       | Choice                                             |
+|---------------|----------------------------------------------------|
+| Language      | Go 1.25+                                           |
+| HTTP routing  | [chi](https://github.com/go-chi/chi) v5            |
+| Queries       | [sqlc](https://sqlc.dev) (compile-time checked SQL)|
+| Database      | SQLite via [modernc.org/sqlite](https://modernc.org/sqlite) (pure Go, no cgo) |
+| Migrations    | [golang-migrate](https://github.com/golang-migrate/migrate) (embedded, runs at boot) |
+| Logging       | `log/slog` (structured, JSON)                      |
+| Rate limiting | `golang.org/x/time/rate`                           |
+| Errors        | RFC 9457 `application/problem+json`                |
+
+## Quickstart
+
+```sh
+make tidy        # fetch dependencies
+make sqlc        # regenerate query code (requires sqlc on PATH)
+make test        # includes the OpenAPI contract tests
+make run         # boots on :8080 with ./folicular.db
+```
+
+Smoke test the core flow:
+
+```sh
+make smoke
+```
+
+### Running with Docker Compose
+
+A containerized dev / real-device-trial setup is provided: a pure-Go static
+image running as a non-root user, with the SQLite database in a named volume.
+
+```sh
+docker compose up -d --build        # or: make compose-up
+docker compose logs -f folicular    # follow the structured JSON logs
+docker compose ps                   # health status
+docker compose down                 # stop, keep the database volume
+docker compose down -v              # stop and wipe the database
+```
+
+The container listens on 8080 internally and is published to the host on
+`${FOLICULAR_HOST_PORT:-8080}`. If 8080 is already taken on your machine:
+
+```sh
+FOLICULAR_HOST_PORT=18080 docker compose up -d --build
+# or: make compose-up FOLICULAR_HOST_PORT=18080
+```
+
+For an Android device on the same host, reach the server via
+`adb reverse tcp:8080 tcp:<host port>` (then `http://127.0.0.1:8080` on the
+device) or the host's LAN IP; the emulator uses `http://10.0.2.2:8080`.
+
+## Documentation
+
+- [`AGENTS.md`](AGENTS.md) - agent and contributor rules for this repository
+- [`docs/architecture.md`](docs/architecture.md) - system design and decisions
+- [`docs/api.md`](docs/api.md) - HTTP API contract prose (auth, sync, reads, Duo)
+- [`openapi/openapi.yaml`](openapi/openapi.yaml) - machine-readable contract (client DTOs are generated from it; guarded by `internal/contract` tests)
+- [`docs/data-model.md`](docs/data-model.md) - schema rationale, research mapping
+- [`docs/deployment.md`](docs/deployment.md) - production deployment on Coolify (with a bare-metal fallback), backups, and the F-Droid-aware security posture
+- [`docs/research/SOURCES.md`](docs/research/SOURCES.md) - source register
+- `docs/research/0*.md` - topic notes linking research to schema decisions
+
+## Layout
+
+```
+cmd/server/            entrypoint: config, DB open + migrate, graceful shutdown
+openapi/               OpenAPI 3.0 spec - the wire contract's single source of truth
+internal/config/       environment configuration
+internal/contract/     tests guarding the OpenAPI spec
+internal/db/           connection, pragmas, embedded migrations, sqlc queries + generated code (dbgen/)
+internal/auth/         account codes, device tokens, auth middleware
+internal/domain/       canonical domain types and validation
+internal/cyclecalc/    estimate engine (ranges, uncertainty, no claims)
+internal/api/          HTTP handlers (RFC 9457 errors)
+internal/server/       chi router wiring and middleware
+scripts/               smoke test
+```
+
+## Related repositories
+
+- Android client: `~/AndroidStudioProjects/luteal` (package `fr.luteal`)

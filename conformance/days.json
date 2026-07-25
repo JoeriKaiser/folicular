@@ -1,0 +1,19 @@
+{
+  "name": "days",
+  "method": "GET",
+  "path": "/v1/days",
+  "status": 200,
+  "body": {
+    "days": [
+      {
+        "date": "2026-07-21",
+        "cycle_day": 22,
+        "bleeding": { "flow": "none", "intermenstrual": false, "product_count": null },
+        "entry": { "pain_level": 2, "mood_level": 3, "energy_level": 4, "notes": "" },
+        "symptoms": [ { "key": "cramps", "severity": 2, "notes": "" } ],
+        "biomarkers": { "bbt_celsius": 36.7, "cervical_fluid": "creamy", "cervix_position": "medium", "cervix_firmness": "firm" },
+        "medications": [ { "name": "Ibuprofene", "dose": "400 mg", "kind": "pain_relief" } ]
+      }
+    ]
+  }
+}

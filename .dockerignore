@@ -1,0 +1,20 @@
+# Keep the build context small and avoid leaking local artifacts into the image.
+# NOTE: cmd/, internal/ (incl. internal/db/migrations/*.sql used by go:embed),
+# go.mod and go.sum are intentionally NOT ignored - the build needs them.
+bin/
+docs/
+openapi/
+scripts/
+data/
+*.db
+*.db-wal
+*.db-shm
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+Makefile
+sqlc.yaml
+README.md
+AGENTS.md

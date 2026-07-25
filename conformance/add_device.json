@@ -1,0 +1,9 @@
+{
+  "name": "add_device",
+  "method": "POST",
+  "path": "/v1/auth/devices",
+  "status": 201,
+  "body": {
+    "device": { "id": "019832e0-6c14-7000-8000-000000000003", "name": "Tablette", "token": "ltok_Xy9-ExampleToken" }
+  }
+}

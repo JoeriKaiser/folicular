@@ -1,0 +1,15 @@
+{
+  "name": "predictions_insufficient",
+  "method": "GET",
+  "path": "/v1/predictions/current",
+  "status": 200,
+  "body": {
+    "generated_at": "2026-07-21T14:03:00Z",
+    "method": "cycle_length_median_v1",
+    "basis": { "cycle_count": 1 },
+    "next_menstruation": null,
+    "ovulation_estimate": null,
+    "fertile_window_estimate": null,
+    "disclaimer": "Estimations fondees sur vos cycles enregistres. Ce ne sont pas des previsions certaines ni un avis medical."
+  }
+}
