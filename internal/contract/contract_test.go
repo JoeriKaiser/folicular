@@ -34,9 +34,8 @@ func TestSpecCoversCoreRoutes(t *testing.T) {
 		"/v1/auth/register", "/v1/auth/devices", "/v1/auth/devices/{deviceID}",
 		"/v1/me",
 		"/v1/sync/push", "/v1/sync/pull",
-		"/v1/cycles", "/v1/days", "/v1/predictions/current",
 		"/v1/duo/invitations", "/v1/duo/links", "/v1/duo/links/{linkID}",
-		"/v1/duo/links/{linkID}/grants", "/v1/duo/view",
+		"/v1/duo/links/{linkID}/grants", "/v1/duo/view", "/v1/duo/payload",
 		"/v1/duo/support-requests", "/v1/duo/support-requests/{requestID}/ack",
 	}
 	for _, p := range paths {
@@ -73,25 +72,54 @@ func TestSpecSecurityAndSchemas(t *testing.T) {
 		}
 	}
 
-	// Estimates must expose uncertainty and the disclaimer.
-	pred := doc.Components.Schemas["Prediction"]
-	if pred == nil {
-		t.Fatal("spec is missing schema Prediction")
-	}
-	for _, field := range []string{"method", "basis", "disclaimer"} {
-		if _, ok := pred.Value.Properties[field]; !ok {
-			t.Errorf("Prediction is missing field %q", field)
+	// Record content must be sealed: nothing on the wire may carry plaintext
+	// observations. Server-side estimates were removed with the E2EE
+	// migration, so there is no Prediction schema to police any more.
+	for _, name := range []string{"SyncChangeInput", "SyncPullChange"} {
+		sch := doc.Components.Schemas[name]
+		if sch == nil {
+			t.Fatalf("spec is missing schema %q", name)
+		}
+		if _, ok := sch.Value.Properties["ciphertext"]; !ok {
+			t.Errorf("%s must carry a ciphertext field", name)
+		}
+		if _, ok := sch.Value.Properties["data"]; ok {
+			t.Errorf("%s must not carry a plaintext data field", name)
 		}
 	}
-	if conf := doc.Components.Schemas["Confidence"]; conf == nil {
-		t.Error("spec is missing the Confidence enum")
-	} else {
-		for _, banned := range []string{"high", "certain", "sure"} {
-			for _, v := range conf.Value.Enum {
-				if v == banned {
-					t.Errorf("Confidence must never include %q", banned)
-				}
-			}
+
+	// The routing metadata the server still needs must stay present, or delta
+	// pull and the last-write-wins guard cannot work on opaque payloads.
+	in := doc.Components.Schemas["SyncChangeInput"]
+	for _, field := range []string{"entity_type", "entity_id", "client_rev", "updated_at", "deleted"} {
+		if _, ok := in.Value.Properties[field]; !ok {
+			t.Errorf("SyncChangeInput is missing routing field %q", field)
 		}
 	}
+
+	// The Duo projection must be relayed, not composed server-side.
+	dv := doc.Components.Schemas["DuoView"]
+	if dv == nil {
+		t.Fatal("spec is missing schema DuoView")
+	}
+	if _, ok := dv.Value.Properties["payload"]; !ok {
+		t.Error("DuoView must carry a sealed payload")
+	}
+	for _, banned := range []string{"cycle_day", "period_estimate", "mood", "energy"} {
+		if _, ok := dv.Value.Properties[banned]; ok {
+			t.Errorf("DuoView must not expose plaintext %q; it belongs in the sealed payload", banned)
+		}
+	}
+
+	// Settings carry Art. 9 health data and must be sealed too.
+	set := doc.Components.Schemas["Settings"]
+	if set == nil {
+		t.Fatal("spec is missing schema Settings")
+	}
+	for _, banned := range []string{"life_stage", "tracking_focus"} {
+		if _, ok := set.Value.Properties[banned]; ok {
+			t.Errorf("Settings must not expose plaintext %q", banned)
+		}
+	}
+
 }

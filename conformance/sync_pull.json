@@ -6,29 +6,31 @@
   "body": {
     "changes": [
       {
-        "seq": 410, "entity_type": "cycle", "entity_id": "019832e1-0000-7000-8000-000000000010",
-        "deleted": false, "updated_at": "2026-07-21T09:12:00Z",
-        "data": {
-          "id": "019832e1-0000-7000-8000-000000000010",
-          "client_rev": "019832e1-1111-7000-8000-000000000011",
-          "created_at": "2026-07-21T08:00:00Z", "updated_at": "2026-07-21T09:12:00Z", "deleted_at": null,
-          "start_date": "2026-06-30", "end_date": "2026-07-27", "length_days": 28, "bleeding_days": 5,
-          "certainty": "recorded", "source": "manual", "notes": ""
-        }
+        "seq": 410,
+        "entity_type": "cycle",
+        "entity_id": "019832e1-0000-7000-8000-000000000010",
+        "client_rev": "019832e1-1111-7000-8000-000000000011",
+        "deleted": false,
+        "updated_at": "2026-07-21T09:12:00Z",
+        "ciphertext": "AYMlTc8to5BU/pz7ml07sS6Lybr5AOw8xX8xELCV9ZfliepxuygeekzNzLBQQ30HkvTw1j+lmuHYgFZRF4KpFps/bEHouQdyKaBbzhQ="
       },
       {
-        "seq": 411, "entity_type": "bleeding_observation", "entity_id": "019832e1-0000-7000-8000-000000000020",
-        "deleted": false, "updated_at": "2026-07-21T09:12:00Z",
-        "data": {
-          "id": "019832e1-0000-7000-8000-000000000020",
-          "client_rev": "019832e1-1111-7000-8000-000000000021",
-          "created_at": "2026-07-21T08:00:00Z", "updated_at": "2026-07-21T09:12:00Z", "deleted_at": null,
-          "observed_date": "2026-06-30", "flow": "medium", "intermenstrual": false, "product_count": 3, "notes": ""
-        }
+        "seq": 411,
+        "entity_type": "bleeding_observation",
+        "entity_id": "019832e1-0000-7000-8000-000000000020",
+        "client_rev": "019832e1-1111-7000-8000-000000000021",
+        "deleted": false,
+        "updated_at": "2026-07-21T09:12:00Z",
+        "ciphertext": "AVg6+D1v0Xnzfl69aN8bqA/VSaMCr6bqnFS98cYS9+yJ6JI0RwCNjR0WMY47ga8sDQs6qbTU6UehmZaIDw=="
       },
       {
-        "seq": 412, "entity_type": "cycle", "entity_id": "019832e1-0000-7000-8000-000000000099",
-        "deleted": true, "updated_at": "2026-07-21T10:00:00Z", "data": null
+        "seq": 412,
+        "entity_type": "cycle",
+        "entity_id": "019832e1-0000-7000-8000-000000000099",
+        "client_rev": "019832e1-1111-7000-8000-000000000099",
+        "deleted": true,
+        "updated_at": "2026-07-21T10:00:00Z",
+        "ciphertext": null
       }
     ],
     "cursor": 412,

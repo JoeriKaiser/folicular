@@ -7,7 +7,6 @@ import (
 	"folicular/internal/api/problem"
 	"folicular/internal/auth"
 	"folicular/internal/db/dbgen"
-	"folicular/internal/domain"
 )
 
 const (
@@ -32,12 +31,15 @@ type deviceShort struct {
 	Name string `json:"name"`
 }
 
+// settingsPayload carries the sealed settings blob.
+//
+// Life stage and tracking focuses (pms, pmdd, endometriosis, pcos) are Art. 9
+// health data, so they are encrypted client-side like every other record and
+// this server stores an opaque blob. It no longer validates them: it cannot
+// read them, and the client is the only party that can.
 type settingsPayload struct {
-	Locale        string   `json:"locale"`
-	TimeZone      string   `json:"time_zone"`
-	LifeStage     string   `json:"life_stage"`
-	TrackingFocus []string `json:"tracking_focus"`
-	UpdatedAt     string   `json:"updated_at"`
+	Settings  []byte `json:"settings"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // HandleMe returns the account, current device, and server-authoritative
@@ -69,23 +71,20 @@ func (d *Deps) HandleMe(w http.ResponseWriter, r *http.Request) {
 
 func settingsToPayload(s dbgen.AccountSetting) settingsPayload {
 	return settingsPayload{
-		Locale:        s.Locale,
-		TimeZone:      s.TimeZone,
-		LifeStage:     s.LifeStage,
-		TrackingFocus: domain.DecodeTrackingFocus(s.TrackingFocus),
-		UpdatedAt:     s.UpdatedAt,
+		Settings:  s.SettingsCiphertext,
+		UpdatedAt: s.UpdatedAt,
 	}
 }
 
 type patchSettingsRequest struct {
-	Locale        *string   `json:"locale"`
-	TimeZone      *string   `json:"time_zone"`
-	LifeStage     *string   `json:"life_stage"`
-	TrackingFocus *[]string `json:"tracking_focus"`
+	Settings []byte `json:"settings"`
 }
 
-// HandlePatchMe partially updates server-authoritative settings. The merged
-// state is validated as a whole before being written.
+// HandlePatchMe replaces the sealed settings blob.
+//
+// There is no server-side merge any more: merging requires reading the fields,
+// which this server cannot do. The client decrypts, merges, reseals, and sends
+// the whole blob.
 func (d *Deps) HandlePatchMe(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := auth.AccountID(r.Context())
 
@@ -93,50 +92,28 @@ func (d *Deps) HandlePatchMe(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-
-	current, err := d.Q.GetSettings(r.Context(), accountID)
-	if err != nil {
-		d.Log.Error("settings lookup failed", "err", err)
-		problem.Write(w, r, problem.Internal())
+	if len(req.Settings) == 0 {
+		problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée",
+			"settings: requis"))
 		return
 	}
-
-	merged := domain.Settings{
-		Locale:        current.Locale,
-		TimeZone:      current.TimeZone,
-		LifeStage:     current.LifeStage,
-		TrackingFocus: domain.DecodeTrackingFocus(current.TrackingFocus),
-	}
-	if req.Locale != nil {
-		merged.Locale = *req.Locale
-	}
-	if req.TimeZone != nil {
-		merged.TimeZone = *req.TimeZone
-	}
-	if req.LifeStage != nil {
-		merged.LifeStage = *req.LifeStage
-	}
-	if req.TrackingFocus != nil {
-		merged.TrackingFocus = *req.TrackingFocus
-	}
-	if err := domain.ValidateSettings(merged); err != nil {
-		problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée", err.Error()))
+	if len(req.Settings) > maxCiphertextBytes {
+		problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée",
+			"settings: charge utile trop volumineuse"))
 		return
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := d.Q.UpdateSettings(r.Context(), dbgen.UpdateSettingsParams{
-		Locale:        merged.Locale,
-		TimeZone:      merged.TimeZone,
-		LifeStage:     merged.LifeStage,
-		TrackingFocus: domain.EncodeTrackingFocus(merged.TrackingFocus),
-		UpdatedAt:     now,
-		AccountID:     accountID,
+		SettingsCiphertext: req.Settings,
+		UpdatedAt:          now,
+		AccountID:          accountID,
 	}); err != nil {
 		d.Log.Error("settings update failed", "err", err)
 		problem.Write(w, r, problem.Internal())
 		return
 	}
+
 
 	// Return the full /v1/me body for client convenience.
 	d.HandleMe(w, r)
@@ -156,104 +133,78 @@ func (d *Deps) HandleDeleteMe(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// HandleExport returns all live records for the account as a single JSON
-// document (GDPR Article 20, data portability). Uses the existing range
-// queries with a maximal window to collect every non-deleted record.
+// HandleExport returns everything this server holds for the account (GDPR
+// Article 20, data portability).
+//
+// Under end-to-end encryption that means sealed records: the server cannot
+// produce a human-readable export because it cannot decrypt. A readable export
+// is the client's responsibility, and the client is the only party able to
+// produce one. This endpoint still matters - it guarantees the user can
+// retrieve the server-side copy in full, and a client holding the account code
+// can decrypt it offline.
 func (d *Deps) HandleExport(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := auth.AccountID(r.Context())
 	ctx := r.Context()
-	params := dbgen.ListCyclesByRangeParams{AccountID: accountID, StartDate: exportDateMin, StartDate_2: exportDateMax}
 
-	cycles, err := d.Q.ListCyclesByRange(ctx, params)
+	account, err := d.Q.GetAccountByID(ctx, accountID)
 	if err != nil {
-		d.Log.Error("export: cycles failed", "err", err)
-		problem.Write(w, r, problem.Internal())
-		return
-	}
-	bleedings, err := d.Q.ListBleedingObservationsByRange(ctx, dbgen.ListBleedingObservationsByRangeParams{
-		AccountID: accountID, ObservedDate: exportDateMin, ObservedDate_2: exportDateMax,
-	})
-	if err != nil {
-		d.Log.Error("export: bleedings failed", "err", err)
-		problem.Write(w, r, problem.Internal())
-		return
-	}
-	entries, err := d.Q.ListDailyEntriesByRange(ctx, dbgen.ListDailyEntriesByRangeParams{
-		AccountID: accountID, EntryDate: exportDateMin, EntryDate_2: exportDateMax,
-	})
-	if err != nil {
-		d.Log.Error("export: daily entries failed", "err", err)
-		problem.Write(w, r, problem.Internal())
-		return
-	}
-	symptomDefs, err := d.Q.ListSymptomDefinitions(ctx, accountID)
-	if err != nil {
-		d.Log.Error("export: symptom definitions failed", "err", err)
-		problem.Write(w, r, problem.Internal())
-		return
-	}
-	symptomLogs, err := d.Q.ListSymptomLogsByRange(ctx, dbgen.ListSymptomLogsByRangeParams{
-		AccountID: accountID, LogDate: exportDateMin, LogDate_2: exportDateMax,
-	})
-	if err != nil {
-		d.Log.Error("export: symptom logs failed", "err", err)
-		problem.Write(w, r, problem.Internal())
-		return
-	}
-	biomarkers, err := d.Q.ListBiomarkerObservationsByRange(ctx, dbgen.ListBiomarkerObservationsByRangeParams{
-		AccountID: accountID, ObservedDate: exportDateMin, ObservedDate_2: exportDateMax,
-	})
-	if err != nil {
-		d.Log.Error("export: biomarkers failed", "err", err)
-		problem.Write(w, r, problem.Internal())
-		return
-	}
-	meds, err := d.Q.ListMedicationLogsByRange(ctx, dbgen.ListMedicationLogsByRangeParams{
-		AccountID: accountID, LogDate: exportDateMin, LogDate_2: exportDateMax,
-	})
-	if err != nil {
-		d.Log.Error("export: medications failed", "err", err)
+		d.Log.Error("export: account failed", "err", err)
 		problem.Write(w, r, problem.Internal())
 		return
 	}
 
-	outCycles := make([]domain.Cycle, 0, len(cycles))
-	for _, row := range cycles {
-		outCycles = append(outCycles, rowToCycle(row))
-	}
-	outBleedings := make([]domain.BleedingObservation, 0, len(bleedings))
-	for _, row := range bleedings {
-		outBleedings = append(outBleedings, rowToBleeding(row))
-	}
-	outEntries := make([]domain.DailyEntry, 0, len(entries))
-	for _, row := range entries {
-		outEntries = append(outEntries, rowToDailyEntry(row))
-	}
-	outSymptomDefs := make([]domain.SymptomDefinition, 0, len(symptomDefs))
-	for _, row := range symptomDefs {
-		outSymptomDefs = append(outSymptomDefs, rowToSymptomDef(row))
-	}
-	outSymptomLogs := make([]domain.SymptomLog, 0, len(symptomLogs))
-	for _, row := range symptomLogs {
-		outSymptomLogs = append(outSymptomLogs, rowToSymptomLog(row))
-	}
-	outBiomarkers := make([]domain.BiomarkerObservation, 0, len(biomarkers))
-	for _, row := range biomarkers {
-		outBiomarkers = append(outBiomarkers, rowToBiomarker(row))
-	}
-	outMeds := make([]domain.MedicationLog, 0, len(meds))
-	for _, row := range meds {
-		outMeds = append(outMeds, rowToMedication(row))
+	records, err := d.Q.ListRecordsForAccount(ctx, accountID)
+	if err != nil {
+		d.Log.Error("export: records failed", "err", err)
+		problem.Write(w, r, problem.Internal())
+		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"exported_at":            time.Now().UTC().Format(time.RFC3339),
-		"cycles":                 outCycles,
-		"bleeding_observations":  outBleedings,
-		"daily_entries":          outEntries,
-		"symptom_definitions":    outSymptomDefs,
-		"symptom_logs":           outSymptomLogs,
-		"biomarker_observations": outBiomarkers,
-		"medication_logs":        outMeds,
-	})
+	settings, err := d.Q.GetSettings(ctx, accountID)
+	if err != nil && !isNotFound(err) {
+		d.Log.Error("export: settings failed", "err", err)
+		problem.Write(w, r, problem.Internal())
+		return
+	}
+
+	out := exportDocument{
+		Format:      "folicular.export.v2.sealed",
+		GeneratedAt: time.Now().UTC().Format(time.RFC3339),
+		Note: "Les enregistrements sont chiffrés de bout en bout. Ce serveur ne " +
+			"peut pas les déchiffrer : utilisez votre code de compte dans " +
+			"l'application pour obtenir une version lisible.",
+		Account:  accountInfo{ID: account.ID, Status: account.Status, CreatedAt: account.CreatedAt},
+		Settings: settingsToPayload(settings),
+		Records:  make([]exportRecord, 0, len(records)),
+	}
+	for _, rec := range records {
+		out.Records = append(out.Records, exportRecord{
+			EntityID:   rec.EntityID,
+			EntityType: rec.EntityType,
+			ClientRev:  rec.ClientRev,
+			Deleted:    rec.Deleted == 1,
+			UpdatedAt:  rec.UpdatedAt,
+			Ciphertext: rec.Ciphertext,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, out)
+}
+
+type exportDocument struct {
+	Format      string          `json:"format"`
+	GeneratedAt string          `json:"generated_at"`
+	Note        string          `json:"note"`
+	Account     accountInfo     `json:"account"`
+	Settings    settingsPayload `json:"settings"`
+	Records     []exportRecord  `json:"records"`
+}
+
+type exportRecord struct {
+	EntityID   string `json:"entity_id"`
+	EntityType string `json:"entity_type"`
+	ClientRev  string `json:"client_rev"`
+	Deleted    bool   `json:"deleted"`
+	UpdatedAt  string `json:"updated_at"`
+	Ciphertext []byte `json:"ciphertext"`
 }

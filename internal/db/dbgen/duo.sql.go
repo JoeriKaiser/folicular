@@ -41,6 +41,15 @@ func (q *Queries) AckSupportRequest(ctx context.Context, arg AckSupportRequestPa
 	return err
 }
 
+const deleteDuoPayload = `-- name: DeleteDuoPayload :exec
+DELETE FROM duo_payloads WHERE link_id = ?
+`
+
+func (q *Queries) DeleteDuoPayload(ctx context.Context, linkID string) error {
+	_, err := q.db.ExecContext(ctx, deleteDuoPayload, linkID)
+	return err
+}
+
 const getActiveDuoLinkByOwner = `-- name: GetActiveDuoLinkByOwner :one
 SELECT id, owner_account_id, partner_account_id, code_hash, status, created_at, updated_at, revoked_at FROM duo_links
 WHERE owner_account_id = ? AND status = 'active'
@@ -103,6 +112,17 @@ func (q *Queries) GetDuoLinkByID(ctx context.Context, id string) (DuoLink, error
 	return i, err
 }
 
+const getDuoPayload = `-- name: GetDuoPayload :one
+SELECT link_id, ciphertext, updated_at FROM duo_payloads WHERE link_id = ?
+`
+
+func (q *Queries) GetDuoPayload(ctx context.Context, linkID string) (DuoPayload, error) {
+	row := q.db.QueryRowContext(ctx, getDuoPayload, linkID)
+	var i DuoPayload
+	err := row.Scan(&i.LinkID, &i.Ciphertext, &i.UpdatedAt)
+	return i, err
+}
+
 const getPendingDuoLinkByCodeHash = `-- name: GetPendingDuoLinkByCodeHash :one
 SELECT id, owner_account_id, partner_account_id, code_hash, status, created_at, updated_at, revoked_at FROM duo_links
 WHERE code_hash = ? AND status = 'pending'
@@ -125,7 +145,7 @@ func (q *Queries) GetPendingDuoLinkByCodeHash(ctx context.Context, codeHash []by
 }
 
 const getSupportRequestByID = `-- name: GetSupportRequestByID :one
-SELECT id, link_id, author_role, kind, message, created_at, acknowledged_at FROM support_requests WHERE id = ?
+SELECT id, link_id, author_role, kind, message_ciphertext, created_at, acknowledged_at FROM support_requests WHERE id = ?
 `
 
 func (q *Queries) GetSupportRequestByID(ctx context.Context, id string) (SupportRequest, error) {
@@ -136,7 +156,7 @@ func (q *Queries) GetSupportRequestByID(ctx context.Context, id string) (Support
 		&i.LinkID,
 		&i.AuthorRole,
 		&i.Kind,
-		&i.Message,
+		&i.MessageCiphertext,
 		&i.CreatedAt,
 		&i.AcknowledgedAt,
 	)
@@ -174,17 +194,17 @@ func (q *Queries) InsertDuoLink(ctx context.Context, arg InsertDuoLinkParams) er
 }
 
 const insertSupportRequest = `-- name: InsertSupportRequest :exec
-INSERT INTO support_requests (id, link_id, author_role, kind, message, created_at)
+INSERT INTO support_requests (id, link_id, author_role, kind, message_ciphertext, created_at)
 VALUES (?, ?, ?, ?, ?, ?)
 `
 
 type InsertSupportRequestParams struct {
-	ID         string `json:"id"`
-	LinkID     string `json:"link_id"`
-	AuthorRole string `json:"author_role"`
-	Kind       string `json:"kind"`
-	Message    string `json:"message"`
-	CreatedAt  string `json:"created_at"`
+	ID                string `json:"id"`
+	LinkID            string `json:"link_id"`
+	AuthorRole        string `json:"author_role"`
+	Kind              string `json:"kind"`
+	MessageCiphertext []byte `json:"message_ciphertext"`
+	CreatedAt         string `json:"created_at"`
 }
 
 func (q *Queries) InsertSupportRequest(ctx context.Context, arg InsertSupportRequestParams) error {
@@ -193,7 +213,7 @@ func (q *Queries) InsertSupportRequest(ctx context.Context, arg InsertSupportReq
 		arg.LinkID,
 		arg.AuthorRole,
 		arg.Kind,
-		arg.Message,
+		arg.MessageCiphertext,
 		arg.CreatedAt,
 	)
 	return err
@@ -277,7 +297,7 @@ func (q *Queries) ListDuoLinksForAccount(ctx context.Context, arg ListDuoLinksFo
 }
 
 const listSupportRequestsByLink = `-- name: ListSupportRequestsByLink :many
-SELECT id, link_id, author_role, kind, message, created_at, acknowledged_at FROM support_requests
+SELECT id, link_id, author_role, kind, message_ciphertext, created_at, acknowledged_at FROM support_requests
 WHERE link_id = ?
 ORDER BY created_at DESC
 LIMIT ?
@@ -302,7 +322,7 @@ func (q *Queries) ListSupportRequestsByLink(ctx context.Context, arg ListSupport
 			&i.LinkID,
 			&i.AuthorRole,
 			&i.Kind,
-			&i.Message,
+			&i.MessageCiphertext,
 			&i.CreatedAt,
 			&i.AcknowledgedAt,
 		); err != nil {
@@ -351,6 +371,28 @@ type RevokeGrantParams struct {
 
 func (q *Queries) RevokeGrant(ctx context.Context, arg RevokeGrantParams) error {
 	_, err := q.db.ExecContext(ctx, revokeGrant, arg.RevokedAt, arg.LinkID, arg.Field)
+	return err
+}
+
+const upsertDuoPayload = `-- name: UpsertDuoPayload :exec
+
+INSERT INTO duo_payloads (link_id, ciphertext, updated_at)
+VALUES (?, ?, ?)
+ON CONFLICT(link_id) DO UPDATE SET
+    ciphertext = excluded.ciphertext,
+    updated_at = excluded.updated_at
+`
+
+type UpsertDuoPayloadParams struct {
+	LinkID     string `json:"link_id"`
+	Ciphertext []byte `json:"ciphertext"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+// Duo payload: sealed by the tracker's device under the link key. The server
+// relays it and cannot read it.
+func (q *Queries) UpsertDuoPayload(ctx context.Context, arg UpsertDuoPayloadParams) error {
+	_, err := q.db.ExecContext(ctx, upsertDuoPayload, arg.LinkID, arg.Ciphertext, arg.UpdatedAt)
 	return err
 }
 

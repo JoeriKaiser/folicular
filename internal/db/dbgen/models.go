@@ -9,81 +9,18 @@ import (
 )
 
 type Account struct {
-	ID        string `json:"id"`
-	CodeHash  []byte `json:"code_hash"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
-	UpdatedAt string `json:"updated_at"`
+	ID           string `json:"id"`
+	CodeHash     []byte `json:"code_hash"`
+	Status       string `json:"status"`
+	CreatedAt    string `json:"created_at"`
+	UpdatedAt    string `json:"updated_at"`
+	DuoPublicKey []byte `json:"duo_public_key"`
 }
 
 type AccountSetting struct {
-	AccountID     string `json:"account_id"`
-	Locale        string `json:"locale"`
-	TimeZone      string `json:"time_zone"`
-	LifeStage     string `json:"life_stage"`
-	TrackingFocus string `json:"tracking_focus"`
-	UpdatedAt     string `json:"updated_at"`
-}
-
-type BiomarkerObservation struct {
-	ID             string          `json:"id"`
-	AccountID      string          `json:"account_id"`
-	ObservedDate   string          `json:"observed_date"`
-	BbtCelsius     sql.NullFloat64 `json:"bbt_celsius"`
-	BbtTime        sql.NullString  `json:"bbt_time"`
-	BbtQuality     string          `json:"bbt_quality"`
-	CervicalFluid  sql.NullString  `json:"cervical_fluid"`
-	CervixPosition sql.NullString  `json:"cervix_position"`
-	CervixFirmness sql.NullString  `json:"cervix_firmness"`
-	Notes          string          `json:"notes"`
-	ClientRev      string          `json:"client_rev"`
-	CreatedAt      string          `json:"created_at"`
-	UpdatedAt      string          `json:"updated_at"`
-	DeletedAt      sql.NullString  `json:"deleted_at"`
-}
-
-type BleedingObservation struct {
-	ID             string         `json:"id"`
-	AccountID      string         `json:"account_id"`
-	ObservedDate   string         `json:"observed_date"`
-	Flow           string         `json:"flow"`
-	Intermenstrual int64          `json:"intermenstrual"`
-	ProductCount   sql.NullInt64  `json:"product_count"`
-	Notes          string         `json:"notes"`
-	ClientRev      string         `json:"client_rev"`
-	CreatedAt      string         `json:"created_at"`
-	UpdatedAt      string         `json:"updated_at"`
-	DeletedAt      sql.NullString `json:"deleted_at"`
-}
-
-type Cycle struct {
-	ID           string         `json:"id"`
-	AccountID    string         `json:"account_id"`
-	StartDate    string         `json:"start_date"`
-	EndDate      sql.NullString `json:"end_date"`
-	LengthDays   sql.NullInt64  `json:"length_days"`
-	BleedingDays sql.NullInt64  `json:"bleeding_days"`
-	Certainty    string         `json:"certainty"`
-	Source       string         `json:"source"`
-	Notes        string         `json:"notes"`
-	ClientRev    string         `json:"client_rev"`
-	CreatedAt    string         `json:"created_at"`
-	UpdatedAt    string         `json:"updated_at"`
-	DeletedAt    sql.NullString `json:"deleted_at"`
-}
-
-type DailyEntry struct {
-	ID          string         `json:"id"`
-	AccountID   string         `json:"account_id"`
-	EntryDate   string         `json:"entry_date"`
-	PainLevel   sql.NullInt64  `json:"pain_level"`
-	MoodLevel   sql.NullInt64  `json:"mood_level"`
-	EnergyLevel sql.NullInt64  `json:"energy_level"`
-	Notes       string         `json:"notes"`
-	ClientRev   string         `json:"client_rev"`
-	CreatedAt   string         `json:"created_at"`
-	UpdatedAt   string         `json:"updated_at"`
-	DeletedAt   sql.NullString `json:"deleted_at"`
+	AccountID          string `json:"account_id"`
+	SettingsCiphertext []byte `json:"settings_ciphertext"`
+	UpdatedAt          string `json:"updated_at"`
 }
 
 type Device struct {
@@ -115,66 +52,41 @@ type DuoLink struct {
 	RevokedAt        sql.NullString `json:"revoked_at"`
 }
 
-type MedicationLog struct {
-	ID        string         `json:"id"`
-	AccountID string         `json:"account_id"`
-	LogDate   string         `json:"log_date"`
-	TakenAt   sql.NullString `json:"taken_at"`
-	Name      string         `json:"name"`
-	Dose      string         `json:"dose"`
-	Kind      string         `json:"kind"`
-	Notes     string         `json:"notes"`
-	ClientRev string         `json:"client_rev"`
-	CreatedAt string         `json:"created_at"`
-	UpdatedAt string         `json:"updated_at"`
-	DeletedAt sql.NullString `json:"deleted_at"`
+type DuoPayload struct {
+	LinkID     string `json:"link_id"`
+	Ciphertext []byte `json:"ciphertext"`
+	UpdatedAt  string `json:"updated_at"`
+}
+
+type Record struct {
+	AccountID  string `json:"account_id"`
+	EntityID   string `json:"entity_id"`
+	EntityType string `json:"entity_type"`
+	ClientRev  string `json:"client_rev"`
+	Ciphertext []byte `json:"ciphertext"`
+	Deleted    int64  `json:"deleted"`
+	UpdatedAt  string `json:"updated_at"`
+	RecordedAt string `json:"recorded_at"`
 }
 
 type SupportRequest struct {
-	ID             string         `json:"id"`
-	LinkID         string         `json:"link_id"`
-	AuthorRole     string         `json:"author_role"`
-	Kind           string         `json:"kind"`
-	Message        string         `json:"message"`
-	CreatedAt      string         `json:"created_at"`
-	AcknowledgedAt sql.NullString `json:"acknowledged_at"`
-}
-
-type SymptomDefinition struct {
-	ID        string         `json:"id"`
-	AccountID string         `json:"account_id"`
-	Key       string         `json:"key"`
-	Label     string         `json:"label"`
-	Category  string         `json:"category"`
-	Builtin   int64          `json:"builtin"`
-	Active    int64          `json:"active"`
-	ClientRev string         `json:"client_rev"`
-	CreatedAt string         `json:"created_at"`
-	UpdatedAt string         `json:"updated_at"`
-	DeletedAt sql.NullString `json:"deleted_at"`
-}
-
-type SymptomLog struct {
-	ID         string         `json:"id"`
-	AccountID  string         `json:"account_id"`
-	LogDate    string         `json:"log_date"`
-	LoggedAt   string         `json:"logged_at"`
-	SymptomKey string         `json:"symptom_key"`
-	Severity   int64          `json:"severity"`
-	Notes      string         `json:"notes"`
-	ClientRev  string         `json:"client_rev"`
-	CreatedAt  string         `json:"created_at"`
-	UpdatedAt  string         `json:"updated_at"`
-	DeletedAt  sql.NullString `json:"deleted_at"`
+	ID                string         `json:"id"`
+	LinkID            string         `json:"link_id"`
+	AuthorRole        string         `json:"author_role"`
+	Kind              string         `json:"kind"`
+	MessageCiphertext []byte         `json:"message_ciphertext"`
+	CreatedAt         string         `json:"created_at"`
+	AcknowledgedAt    sql.NullString `json:"acknowledged_at"`
 }
 
 type SyncChange struct {
-	Seq        int64          `json:"seq"`
-	AccountID  string         `json:"account_id"`
-	EntityType string         `json:"entity_type"`
-	EntityID   string         `json:"entity_id"`
-	Deleted    int64          `json:"deleted"`
-	Payload    sql.NullString `json:"payload"`
-	UpdatedAt  string         `json:"updated_at"`
-	RecordedAt string         `json:"recorded_at"`
+	Seq        int64  `json:"seq"`
+	AccountID  string `json:"account_id"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	ClientRev  string `json:"client_rev"`
+	Deleted    int64  `json:"deleted"`
+	Ciphertext []byte `json:"ciphertext"`
+	UpdatedAt  string `json:"updated_at"`
+	RecordedAt string `json:"recorded_at"`
 }

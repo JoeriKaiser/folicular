@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -15,14 +13,26 @@ import (
 	"folicular/internal/domain"
 )
 
-// Sync protocol: see docs/api.md. Each pushed change is validated, applied
-// with an entity-level last-write-wins guard, and appended to the account's
-// change log. Losing records are returned as conflicts carrying the server's
-// current state, so nothing is silently lost.
+// Sync protocol: see docs/api.md.
+//
+// Record content is end-to-end encrypted on the client and opaque here (see the
+// client repo's docs/architecture/E2EE_DESIGN.md). This server therefore
+// validates only the routing envelope - identifiers, entity type, ordering
+// timestamp, tombstone flag - and never the payload. Content validation is the
+// client's responsibility because it is the only party that can read it.
+//
+// Each pushed change is applied with an entity-level last-write-wins guard and
+// appended to the account's change log. Losing records are returned as
+// conflicts carrying the server's current sealed state, so nothing is silently
+// lost: the client decrypts and reconciles locally.
 
 type pushChange struct {
-	EntityType string          `json:"entity_type"`
-	Data       json.RawMessage `json:"data"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	ClientRev  string `json:"client_rev"`
+	UpdatedAt  string `json:"updated_at"`
+	Deleted    bool   `json:"deleted"`
+	Ciphertext []byte `json:"ciphertext"`
 }
 
 type pushRequest struct {
@@ -42,10 +52,13 @@ type rejectedRef struct {
 }
 
 type conflictRef struct {
-	EntityType string          `json:"entity_type"`
-	EntityID   string          `json:"entity_id"`
-	Reason     string          `json:"reason"`
-	Current    json.RawMessage `json:"current"`
+	EntityType        string `json:"entity_type"`
+	EntityID          string `json:"entity_id"`
+	Reason            string `json:"reason"`
+	CurrentClientRev  string `json:"current_client_rev"`
+	CurrentUpdatedAt  string `json:"current_updated_at"`
+	CurrentDeleted    bool   `json:"current_deleted"`
+	CurrentCiphertext []byte `json:"current_ciphertext"`
 }
 
 type pushResponse struct {
@@ -56,6 +69,11 @@ type pushResponse struct {
 }
 
 const maxBatchChanges = 1000
+
+// maxCiphertextBytes bounds a single sealed record. Generous relative to any
+// realistic observation, tight enough that the store cannot be repurposed as
+// arbitrary blob hosting.
+const maxCiphertextBytes = 64 * 1024
 
 // HandleSyncPush applies a batch of client changes.
 func (d *Deps) HandleSyncPush(w http.ResponseWriter, r *http.Request) {
@@ -104,18 +122,51 @@ func (d *Deps) HandleSyncPush(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-// applyChange validates and applies one change in its own transaction: the
-// entity upsert and the change-log append are atomic per change. Conflicts
-// (LWW guard lost) roll back and return the server's current state.
+// validate checks the routing envelope only. The payload is ciphertext and is
+// deliberately not inspected.
+func (ch pushChange) validate() error {
+	if !domain.IsEntityType(ch.EntityType) {
+		return fmt.Errorf("entity_type: type inconnu %q", ch.EntityType)
+	}
+	if !domain.IsUUID(ch.EntityID) {
+		return fmt.Errorf("entity_id: UUID invalide")
+	}
+	if !domain.IsUUID(ch.ClientRev) {
+		return fmt.Errorf("client_rev: UUID invalide")
+	}
+	if !domain.IsInstant(ch.UpdatedAt) {
+		return fmt.Errorf("updated_at: instant RFC 3339 invalide")
+	}
+	if t, err := time.Parse(time.RFC3339, ch.UpdatedAt); err == nil {
+		if t.After(time.Now().Add(5 * time.Minute)) {
+			return fmt.Errorf("updated_at: horodatage trop éloigné dans le futur (horloge décalée)")
+		}
+	}
+	if len(ch.Ciphertext) > maxCiphertextBytes {
+		return fmt.Errorf("ciphertext: au plus %d octets", maxCiphertextBytes)
+	}
+	if !ch.Deleted && len(ch.Ciphertext) == 0 {
+		return fmt.Errorf("ciphertext: requis sauf pour une suppression")
+	}
+	return nil
+}
+
+// applyChange applies one change in its own transaction: the record upsert and
+// the change-log append are atomic per change. Losing the last-write-wins guard
+// rolls back and returns the server's current sealed state.
 func (d *Deps) applyChange(ctx context.Context, accountID string, ch pushChange) (*appliedRef, *conflictRef, *rejectedRef) {
 	reject := func(entityID, detail string) (*appliedRef, *conflictRef, *rejectedRef) {
 		return nil, nil, &rejectedRef{EntityType: ch.EntityType, EntityID: entityID, Detail: detail}
 	}
 
+	if err := ch.validate(); err != nil {
+		return reject(ch.EntityID, err.Error())
+	}
+
 	tx, err := d.DB.BeginTx(ctx, nil)
 	if err != nil {
 		d.Log.Error("begin tx failed", "err", err)
-		return reject("", "transaction impossible")
+		return reject(ch.EntityID, "transaction impossible")
 	}
 	td := &Deps{Q: d.Q.WithTx(tx), DB: d.DB, Log: d.Log}
 	committed := false
@@ -125,7 +176,7 @@ func (d *Deps) applyChange(ctx context.Context, accountID string, ch pushChange)
 		}
 	}()
 
-	applied, conflict, rej := td.dispatchChange(ctx, accountID, ch, reject)
+	applied, conflict, rej := td.applySealedRecord(ctx, accountID, ch, reject)
 	if applied == nil {
 		return applied, conflict, rej
 	}
@@ -137,345 +188,89 @@ func (d *Deps) applyChange(ctx context.Context, accountID string, ch pushChange)
 	return applied, conflict, rej
 }
 
-// dispatchChange decodes, validates, applies (LWW), and records one change
+// applySealedRecord upserts one sealed record and appends it to the change log,
 // against the transaction-bound queries.
-func (d *Deps) dispatchChange(
+func (d *Deps) applySealedRecord(
 	ctx context.Context,
 	accountID string,
 	ch pushChange,
 	reject func(entityID, detail string) (*appliedRef, *conflictRef, *rejectedRef),
 ) (*appliedRef, *conflictRef, *rejectedRef) {
-	switch ch.EntityType {
-	case domain.TypeCycle:
-		return applyRecord(ctx, d, accountID, ch, reject,
-			func(c domain.Cycle) (domain.Envelope, error) {
-				if err := c.Validate(); err != nil {
-					return c.Envelope, err
-				}
-				return c.Envelope, d.upsertCycle(ctx, accountID, c)
-			},
-			func(id string) (any, error) {
-				row, err := d.Q.GetCycleByID(ctx, dbgen.GetCycleByIDParams{ID: id, AccountID: accountID})
-				if err != nil {
-					return nil, err
-				}
-				return rowToCycle(row), nil
-			},
-		)
-	case domain.TypeBleedingObservation:
-		return applyRecord(ctx, d, accountID, ch, reject,
-			func(b domain.BleedingObservation) (domain.Envelope, error) {
-				if err := b.Validate(); err != nil {
-					return b.Envelope, err
-				}
-				return b.Envelope, d.upsertBleeding(ctx, accountID, b)
-			},
-			func(id string) (any, error) {
-				row, err := d.Q.GetBleedingObservationByID(ctx, dbgen.GetBleedingObservationByIDParams{ID: id, AccountID: accountID})
-				if err != nil {
-					return nil, err
-				}
-				return rowToBleeding(row), nil
-			},
-		)
-	case domain.TypeDailyEntry:
-		return applyRecord(ctx, d, accountID, ch, reject,
-			func(e domain.DailyEntry) (domain.Envelope, error) {
-				if err := e.Validate(); err != nil {
-					return e.Envelope, err
-				}
-				return e.Envelope, d.upsertDailyEntry(ctx, accountID, e)
-			},
-			func(id string) (any, error) {
-				row, err := d.Q.GetDailyEntryByID(ctx, dbgen.GetDailyEntryByIDParams{ID: id, AccountID: accountID})
-				if err != nil {
-					return nil, err
-				}
-				return rowToDailyEntry(row), nil
-			},
-		)
-	case domain.TypeSymptomDefinition:
-		return applyRecord(ctx, d, accountID, ch, reject,
-			func(s domain.SymptomDefinition) (domain.Envelope, error) {
-				if err := s.Validate(); err != nil {
-					return s.Envelope, err
-				}
-				return s.Envelope, d.upsertSymptomDef(ctx, accountID, s)
-			},
-			func(id string) (any, error) {
-				row, err := d.Q.GetSymptomDefinitionByID(ctx, dbgen.GetSymptomDefinitionByIDParams{ID: id, AccountID: accountID})
-				if err != nil {
-					return nil, err
-				}
-				return rowToSymptomDef(row), nil
-			},
-		)
-	case domain.TypeSymptomLog:
-		return applyRecord(ctx, d, accountID, ch, reject,
-			func(s domain.SymptomLog) (domain.Envelope, error) {
-				if err := s.Validate(); err != nil {
-					return s.Envelope, err
-				}
-				return s.Envelope, d.upsertSymptomLog(ctx, accountID, s)
-			},
-			func(id string) (any, error) {
-				row, err := d.Q.GetSymptomLogByID(ctx, dbgen.GetSymptomLogByIDParams{ID: id, AccountID: accountID})
-				if err != nil {
-					return nil, err
-				}
-				return rowToSymptomLog(row), nil
-			},
-		)
-	case domain.TypeBiomarkerObservation:
-		return applyRecord(ctx, d, accountID, ch, reject,
-			func(b domain.BiomarkerObservation) (domain.Envelope, error) {
-				if err := b.Validate(); err != nil {
-					return b.Envelope, err
-				}
-				return b.Envelope, d.upsertBiomarker(ctx, accountID, b)
-			},
-			func(id string) (any, error) {
-				row, err := d.Q.GetBiomarkerObservationByID(ctx, dbgen.GetBiomarkerObservationByIDParams{ID: id, AccountID: accountID})
-				if err != nil {
-					return nil, err
-				}
-				return rowToBiomarker(row), nil
-			},
-		)
-	case domain.TypeMedicationLog:
-		return applyRecord(ctx, d, accountID, ch, reject,
-			func(m domain.MedicationLog) (domain.Envelope, error) {
-				if err := m.Validate(); err != nil {
-					return m.Envelope, err
-				}
-				return m.Envelope, d.upsertMedication(ctx, accountID, m)
-			},
-			func(id string) (any, error) {
-				row, err := d.Q.GetMedicationLogByID(ctx, dbgen.GetMedicationLogByIDParams{ID: id, AccountID: accountID})
-				if err != nil {
-					return nil, err
-				}
-				return rowToMedication(row), nil
-			},
-		)
-	default:
-		return reject("", "entity_type: valeur invalide "+strconv.Quote(ch.EntityType))
-	}
-}
-
-// applyRecord decodes, validates, applies (LWW), and records one change.
-// T is the domain record type; validateApply validates then upserts,
-// returning errNotApplied when the LWW guard rejects the write;
-// fetchCurrent loads the server state for conflicts.
-func applyRecord[T any](
-	ctx context.Context,
-	d *Deps,
-	accountID string,
-	ch pushChange,
-	reject func(entityID, detail string) (*appliedRef, *conflictRef, *rejectedRef),
-	validateApply func(T) (domain.Envelope, error),
-	fetchCurrent func(id string) (any, error),
-) (*appliedRef, *conflictRef, *rejectedRef) {
-	var record T
-	if err := json.Unmarshal(ch.Data, &record); err != nil {
-		return reject("", "data: JSON invalide ("+err.Error()+")")
-	}
-	env, err := validateApply(record)
-	if err != nil {
-		if errors.As(err, &errNotApplied{}) {
-			// LWW guard rejected the write: return the server's current state.
-			current, fetchErr := fetchCurrent(env.ID)
-			if fetchErr != nil {
-				d.Log.Error("conflict fetch failed", "entity_type", ch.EntityType, "id", env.ID, "err", fetchErr)
-				return reject(env.ID, "conflit illisible côté serveur")
-			}
-			payload, mErr := json.Marshal(current)
-			if mErr != nil {
-				return reject(env.ID, "conflit non sérialisable")
-			}
-			return nil, &conflictRef{
-				EntityType: ch.EntityType,
-				EntityID:   env.ID,
-				Reason:     "superseded",
-				Current:    payload,
-			}, nil
-		}
-		return reject(env.ID, err.Error())
-	}
-
-	seq, err := d.recordChange(ctx, accountID, ch.EntityType, env)
-	if err != nil {
-		d.Log.Error("change log append failed", "entity_type", ch.EntityType, "id", env.ID, "err", err)
-		return reject(env.ID, "échec de l'enregistrement serveur")
-	}
-	return &appliedRef{EntityType: ch.EntityType, EntityID: env.ID, Seq: seq}, nil, nil
-}
-
-// errNotApplied marks an upsert that lost the last-write-wins guard.
-type errNotApplied struct{}
-
-func (errNotApplied) Error() string { return "not applied" }
-
-// recordChange appends the applied record to the change log. The payload is
-// the canonical JSON of the stored domain record (re-read from the entity
-// table would also be valid; the validated input is canonical by contract).
-func (d *Deps) recordChange(ctx context.Context, accountID, entityType string, env domain.Envelope) (int64, error) {
-	payload, err := d.currentPayload(ctx, accountID, entityType, env.ID)
-	if err != nil {
-		return 0, err
-	}
 	now := time.Now().UTC().Format(time.RFC3339)
+
 	deleted := int64(0)
-	if env.IsDeleted() {
-		deleted = 1
+	var ciphertext []byte
+	if ch.Deleted {
+		deleted = 1 // a tombstone carries no content
+	} else {
+		ciphertext = ch.Ciphertext
 	}
-	return d.Q.RecordChange(ctx, dbgen.RecordChangeParams{
+
+	n, err := d.Q.UpsertRecord(ctx, dbgen.UpsertRecordParams{
 		AccountID:  accountID,
-		EntityType: entityType,
-		EntityID:   env.ID,
+		EntityID:   ch.EntityID,
+		EntityType: ch.EntityType,
+		ClientRev:  ch.ClientRev,
+		Ciphertext: ciphertext,
 		Deleted:    deleted,
-		Payload:    ns(payload),
-		UpdatedAt:  env.UpdatedAt,
+		UpdatedAt:  ch.UpdatedAt,
 		RecordedAt: now,
 	})
-}
-
-// currentPayload re-reads the stored row so the change log mirrors the
-// server's actual state (the source of truth), not the client's submission.
-func (d *Deps) currentPayload(ctx context.Context, accountID, entityType, id string) (*string, error) {
-	var v any
-	var err error
-	switch entityType {
-	case domain.TypeCycle:
-		var row dbgen.Cycle
-		row, err = d.Q.GetCycleByID(ctx, dbgen.GetCycleByIDParams{ID: id, AccountID: accountID})
-		v = rowToCycle(row)
-	case domain.TypeBleedingObservation:
-		var row dbgen.BleedingObservation
-		row, err = d.Q.GetBleedingObservationByID(ctx, dbgen.GetBleedingObservationByIDParams{ID: id, AccountID: accountID})
-		v = rowToBleeding(row)
-	case domain.TypeDailyEntry:
-		var row dbgen.DailyEntry
-		row, err = d.Q.GetDailyEntryByID(ctx, dbgen.GetDailyEntryByIDParams{ID: id, AccountID: accountID})
-		v = rowToDailyEntry(row)
-	case domain.TypeSymptomDefinition:
-		var row dbgen.SymptomDefinition
-		row, err = d.Q.GetSymptomDefinitionByID(ctx, dbgen.GetSymptomDefinitionByIDParams{ID: id, AccountID: accountID})
-		v = rowToSymptomDef(row)
-	case domain.TypeSymptomLog:
-		var row dbgen.SymptomLog
-		row, err = d.Q.GetSymptomLogByID(ctx, dbgen.GetSymptomLogByIDParams{ID: id, AccountID: accountID})
-		v = rowToSymptomLog(row)
-	case domain.TypeBiomarkerObservation:
-		var row dbgen.BiomarkerObservation
-		row, err = d.Q.GetBiomarkerObservationByID(ctx, dbgen.GetBiomarkerObservationByIDParams{ID: id, AccountID: accountID})
-		v = rowToBiomarker(row)
-	case domain.TypeMedicationLog:
-		var row dbgen.MedicationLog
-		row, err = d.Q.GetMedicationLogByID(ctx, dbgen.GetMedicationLogByIDParams{ID: id, AccountID: accountID})
-		v = rowToMedication(row)
-	default:
-		return nil, fmt.Errorf("unknown entity type %q", entityType)
-	}
 	if err != nil {
-		return nil, err
+		d.Log.Error("record upsert failed", "entity_type", ch.EntityType, "err", err)
+		return reject(ch.EntityID, "échec de l'enregistrement serveur")
 	}
-	b, err := json.Marshal(v)
-	if err != nil {
-		return nil, err
-	}
-	s := string(b)
-	return &s, nil
-}
 
-// Per-type upsert wrappers translating "0 rows affected" into errNotApplied.
-
-func (d *Deps) upsertCycle(ctx context.Context, accountID string, c domain.Cycle) error {
-	n, err := d.Q.UpsertCycle(ctx, cycleParams(accountID, c))
-	if err != nil {
-		return err
-	}
 	if n == 0 {
-		return errNotApplied{}
+		// Lost the last-write-wins guard: hand back the server's current
+		// sealed state so the client can decrypt and reconcile.
+		cur, err := d.Q.GetRecord(ctx, dbgen.GetRecordParams{
+			AccountID: accountID,
+			EntityID:  ch.EntityID,
+		})
+		if err != nil {
+			d.Log.Error("conflict lookup failed", "entity_id", ch.EntityID, "err", err)
+			return reject(ch.EntityID, "état serveur indisponible")
+		}
+		return nil, &conflictRef{
+			EntityType:        cur.EntityType,
+			EntityID:          cur.EntityID,
+			Reason:            "superseded",
+			CurrentClientRev:  cur.ClientRev,
+			CurrentUpdatedAt:  cur.UpdatedAt,
+			CurrentDeleted:    cur.Deleted == 1,
+			CurrentCiphertext: cur.Ciphertext,
+		}, nil
 	}
-	return nil
-}
 
-func (d *Deps) upsertBleeding(ctx context.Context, accountID string, b domain.BleedingObservation) error {
-	n, err := d.Q.UpsertBleedingObservation(ctx, bleedingParams(accountID, b))
+	seq, err := d.Q.RecordChange(ctx, dbgen.RecordChangeParams{
+		AccountID:  accountID,
+		EntityType: ch.EntityType,
+		EntityID:   ch.EntityID,
+		ClientRev:  ch.ClientRev,
+		Deleted:    deleted,
+		Ciphertext: ciphertext,
+		UpdatedAt:  ch.UpdatedAt,
+		RecordedAt: now,
+	})
 	if err != nil {
-		return err
+		d.Log.Error("change log append failed", "entity_type", ch.EntityType, "id", ch.EntityID, "err", err)
+		return reject(ch.EntityID, "échec de l'enregistrement serveur")
 	}
-	if n == 0 {
-		return errNotApplied{}
-	}
-	return nil
-}
 
-func (d *Deps) upsertDailyEntry(ctx context.Context, accountID string, e domain.DailyEntry) error {
-	n, err := d.Q.UpsertDailyEntry(ctx, dailyEntryParams(accountID, e))
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errNotApplied{}
-	}
-	return nil
-}
-
-func (d *Deps) upsertSymptomDef(ctx context.Context, accountID string, s domain.SymptomDefinition) error {
-	n, err := d.Q.UpsertSymptomDefinition(ctx, symptomDefParams(accountID, s))
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errNotApplied{}
-	}
-	return nil
-}
-
-func (d *Deps) upsertSymptomLog(ctx context.Context, accountID string, s domain.SymptomLog) error {
-	n, err := d.Q.UpsertSymptomLog(ctx, symptomLogParams(accountID, s))
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errNotApplied{}
-	}
-	return nil
-}
-
-func (d *Deps) upsertBiomarker(ctx context.Context, accountID string, b domain.BiomarkerObservation) error {
-	n, err := d.Q.UpsertBiomarkerObservation(ctx, biomarkerParams(accountID, b))
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errNotApplied{}
-	}
-	return nil
-}
-
-func (d *Deps) upsertMedication(ctx context.Context, accountID string, m domain.MedicationLog) error {
-	n, err := d.Q.UpsertMedicationLog(ctx, medicationParams(accountID, m))
-	if err != nil {
-		return err
-	}
-	if n == 0 {
-		return errNotApplied{}
-	}
-	return nil
+	return &appliedRef{EntityType: ch.EntityType, EntityID: ch.EntityID, Seq: seq}, nil, nil
 }
 
 // Pull --------------------------------------------------------------------
 
 type pullChange struct {
-	Seq        int64           `json:"seq"`
-	EntityType string          `json:"entity_type"`
-	EntityID   string          `json:"entity_id"`
-	Deleted    bool            `json:"deleted"`
-	UpdatedAt  string          `json:"updated_at"`
-	Data       json.RawMessage `json:"data"`
+	Seq        int64  `json:"seq"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	ClientRev  string `json:"client_rev"`
+	Deleted    bool   `json:"deleted"`
+	UpdatedAt  string `json:"updated_at"`
+	Ciphertext []byte `json:"ciphertext"`
 }
 
 type pullResponse struct {
@@ -532,12 +327,12 @@ func (d *Deps) HandleSyncPull(w http.ResponseWriter, r *http.Request) {
 			Seq:        row.Seq,
 			EntityType: row.EntityType,
 			EntityID:   row.EntityID,
+			ClientRev:  row.ClientRev,
 			Deleted:    row.Deleted == 1,
 			UpdatedAt:  row.UpdatedAt,
-			Data:       nil,
 		}
-		if row.Payload.Valid && !pc.Deleted {
-			pc.Data = json.RawMessage(row.Payload.String)
+		if !pc.Deleted {
+			pc.Ciphertext = row.Ciphertext
 		}
 		resp.Changes = append(resp.Changes, pc)
 		resp.Cursor = row.Seq

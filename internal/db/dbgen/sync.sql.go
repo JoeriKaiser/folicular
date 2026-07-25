@@ -7,7 +7,6 @@ package dbgen
 
 import (
 	"context"
-	"database/sql"
 )
 
 const latestCursor = `-- name: LatestCursor :one
@@ -22,7 +21,7 @@ func (q *Queries) LatestCursor(ctx context.Context, accountID string) (int64, er
 }
 
 const pullChanges = `-- name: PullChanges :many
-SELECT seq, entity_type, entity_id, deleted, payload, updated_at, recorded_at
+SELECT seq, entity_type, entity_id, client_rev, deleted, ciphertext, updated_at, recorded_at
 FROM sync_changes
 WHERE account_id = ? AND seq > ?
 ORDER BY seq
@@ -36,13 +35,14 @@ type PullChangesParams struct {
 }
 
 type PullChangesRow struct {
-	Seq        int64          `json:"seq"`
-	EntityType string         `json:"entity_type"`
-	EntityID   string         `json:"entity_id"`
-	Deleted    int64          `json:"deleted"`
-	Payload    sql.NullString `json:"payload"`
-	UpdatedAt  string         `json:"updated_at"`
-	RecordedAt string         `json:"recorded_at"`
+	Seq        int64  `json:"seq"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	ClientRev  string `json:"client_rev"`
+	Deleted    int64  `json:"deleted"`
+	Ciphertext []byte `json:"ciphertext"`
+	UpdatedAt  string `json:"updated_at"`
+	RecordedAt string `json:"recorded_at"`
 }
 
 func (q *Queries) PullChanges(ctx context.Context, arg PullChangesParams) ([]PullChangesRow, error) {
@@ -58,8 +58,9 @@ func (q *Queries) PullChanges(ctx context.Context, arg PullChangesParams) ([]Pul
 			&i.Seq,
 			&i.EntityType,
 			&i.EntityID,
+			&i.ClientRev,
 			&i.Deleted,
-			&i.Payload,
+			&i.Ciphertext,
 			&i.UpdatedAt,
 			&i.RecordedAt,
 		); err != nil {
@@ -78,19 +79,21 @@ func (q *Queries) PullChanges(ctx context.Context, arg PullChangesParams) ([]Pul
 
 const recordChange = `-- name: RecordChange :one
 INSERT INTO sync_changes (
-    account_id, entity_type, entity_id, deleted, payload, updated_at, recorded_at
-) VALUES (?, ?, ?, ?, ?, ?, ?)
+    account_id, entity_type, entity_id, client_rev, deleted, ciphertext,
+    updated_at, recorded_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 RETURNING seq
 `
 
 type RecordChangeParams struct {
-	AccountID  string         `json:"account_id"`
-	EntityType string         `json:"entity_type"`
-	EntityID   string         `json:"entity_id"`
-	Deleted    int64          `json:"deleted"`
-	Payload    sql.NullString `json:"payload"`
-	UpdatedAt  string         `json:"updated_at"`
-	RecordedAt string         `json:"recorded_at"`
+	AccountID  string `json:"account_id"`
+	EntityType string `json:"entity_type"`
+	EntityID   string `json:"entity_id"`
+	ClientRev  string `json:"client_rev"`
+	Deleted    int64  `json:"deleted"`
+	Ciphertext []byte `json:"ciphertext"`
+	UpdatedAt  string `json:"updated_at"`
+	RecordedAt string `json:"recorded_at"`
 }
 
 func (q *Queries) RecordChange(ctx context.Context, arg RecordChangeParams) (int64, error) {
@@ -98,8 +101,9 @@ func (q *Queries) RecordChange(ctx context.Context, arg RecordChangeParams) (int
 		arg.AccountID,
 		arg.EntityType,
 		arg.EntityID,
+		arg.ClientRev,
 		arg.Deleted,
-		arg.Payload,
+		arg.Ciphertext,
 		arg.UpdatedAt,
 		arg.RecordedAt,
 	)

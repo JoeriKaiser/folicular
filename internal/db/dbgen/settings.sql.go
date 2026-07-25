@@ -10,24 +10,18 @@ import (
 )
 
 const getSettings = `-- name: GetSettings :one
-SELECT account_id, locale, time_zone, life_stage, tracking_focus, updated_at FROM account_settings WHERE account_id = ?
+SELECT account_id, settings_ciphertext, updated_at FROM account_settings WHERE account_id = ?
 `
 
 func (q *Queries) GetSettings(ctx context.Context, accountID string) (AccountSetting, error) {
 	row := q.db.QueryRowContext(ctx, getSettings, accountID)
 	var i AccountSetting
-	err := row.Scan(
-		&i.AccountID,
-		&i.Locale,
-		&i.TimeZone,
-		&i.LifeStage,
-		&i.TrackingFocus,
-		&i.UpdatedAt,
-	)
+	err := row.Scan(&i.AccountID, &i.SettingsCiphertext, &i.UpdatedAt)
 	return i, err
 }
 
 const insertDefaultSettings = `-- name: InsertDefaultSettings :exec
+
 INSERT INTO account_settings (account_id, updated_at)
 VALUES (?, ?)
 `
@@ -37,6 +31,8 @@ type InsertDefaultSettingsParams struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+// Settings content (life stage, tracking focuses) is Art. 9 health data and is
+// sealed client-side like every other record.
 func (q *Queries) InsertDefaultSettings(ctx context.Context, arg InsertDefaultSettingsParams) error {
 	_, err := q.db.ExecContext(ctx, insertDefaultSettings, arg.AccountID, arg.UpdatedAt)
 	return err
@@ -44,27 +40,17 @@ func (q *Queries) InsertDefaultSettings(ctx context.Context, arg InsertDefaultSe
 
 const updateSettings = `-- name: UpdateSettings :exec
 UPDATE account_settings
-SET locale = ?, time_zone = ?, life_stage = ?, tracking_focus = ?, updated_at = ?
+SET settings_ciphertext = ?, updated_at = ?
 WHERE account_id = ?
 `
 
 type UpdateSettingsParams struct {
-	Locale        string `json:"locale"`
-	TimeZone      string `json:"time_zone"`
-	LifeStage     string `json:"life_stage"`
-	TrackingFocus string `json:"tracking_focus"`
-	UpdatedAt     string `json:"updated_at"`
-	AccountID     string `json:"account_id"`
+	SettingsCiphertext []byte `json:"settings_ciphertext"`
+	UpdatedAt          string `json:"updated_at"`
+	AccountID          string `json:"account_id"`
 }
 
 func (q *Queries) UpdateSettings(ctx context.Context, arg UpdateSettingsParams) error {
-	_, err := q.db.ExecContext(ctx, updateSettings,
-		arg.Locale,
-		arg.TimeZone,
-		arg.LifeStage,
-		arg.TrackingFocus,
-		arg.UpdatedAt,
-		arg.AccountID,
-	)
+	_, err := q.db.ExecContext(ctx, updateSettings, arg.SettingsCiphertext, arg.UpdatedAt, arg.AccountID)
 	return err
 }

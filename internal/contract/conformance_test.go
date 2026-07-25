@@ -9,6 +9,8 @@ package contract
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -163,20 +165,21 @@ func TestConformance_CoreFlow(t *testing.T) {
 	// Device list: 200 (validates the Device schema incl. nullable last_seen).
 	h.do("GET", "/v1/auth/devices", nil, 200)
 
-	// Settings patch: 200 Me.
-	h.do("PATCH", "/v1/me", map[string]any{"life_stage": "reproductive_peak"}, 200)
+	// Settings patch: 200 Me. Settings are sealed client-side, so the server
+	// receives an opaque blob and performs no merge.
+	h.do("PATCH", "/v1/me", map[string]any{"settings": sealedBlob()}, 200)
 
-	// Sync push: 200 SyncPushResult.
+	// Sync push: 200 SyncPushResult. Content is sealed; the server validates
+	// only the routing envelope.
 	h.do("POST", "/v1/sync/push", map[string]any{
 		"changes": []map[string]any{
 			{
 				"entity_type": "cycle",
-				"data": map[string]any{
-					"id": "019832e0-6c14-7000-8000-000000000001", "client_rev": "019832e0-6c14-7000-8000-000000000002",
-					"created_at": "2026-07-01T08:00:00Z", "updated_at": "2026-07-01T08:00:00Z", "deleted_at": nil,
-					"start_date": "2026-06-30", "end_date": nil, "length_days": nil, "bleeding_days": 5,
-					"certainty": "recorded", "source": "manual", "notes": "",
-				},
+				"entity_id":   "019832e0-6c14-7000-8000-000000000001",
+				"client_rev":  "019832e0-6c14-7000-8000-000000000002",
+				"updated_at":  "2026-07-01T08:00:00Z",
+				"deleted":     false,
+				"ciphertext":  sealedBlob(),
 			},
 		},
 	}, 200)
@@ -184,12 +187,9 @@ func TestConformance_CoreFlow(t *testing.T) {
 	// Sync pull: 200 SyncPullResult.
 	h.do("GET", "/v1/sync/pull?since=0", nil, 200)
 
-	// Read models.
-	h.do("GET", "/v1/cycles?from=2026-01-01&to=2026-12-31", nil, 200)
-	h.do("GET", "/v1/days?from=2026-06-30&to=2026-07-02", nil, 200)
-
-	// Estimates: 200 Prediction (insufficient history -> null windows, still valid).
-	h.do("GET", "/v1/predictions/current", nil, 200)
+	// /v1/cycles, /v1/days and /v1/predictions/current were removed with the
+	// E2EE migration: all three required reading record content. Reads and
+	// estimates are served from the client's local store.
 
 	// Duo: invitation 201, then view 404 for a tracker with no active link is
 	// not the case here (tracker has a pending link) - view returns 404 because
@@ -215,15 +215,18 @@ func TestConformance_ErrorShapes(t *testing.T) {
 	// batch endpoint reports per-change validation in-band).
 	reg := h.do("POST", "/v1/auth/register", map[string]any{"device_name": "conf"}, 201)
 	h.token = reg["device"].(map[string]any)["token"].(string)
+	// The server can no longer reject on content (it cannot read it), so the
+	// in-band rejection path is exercised with an invalid routing envelope:
+	// a non-deleted change carrying no ciphertext.
 	res := h.do("POST", "/v1/sync/push", map[string]any{
 		"changes": []map[string]any{
 			{
 				"entity_type": "daily_entry",
-				"data": map[string]any{
-					"id": "019832e0-6c14-7000-8000-000000000003", "client_rev": "019832e0-6c14-7000-8000-000000000004",
-					"created_at": "2026-07-01T08:00:00Z", "updated_at": "2026-07-01T08:00:00Z", "deleted_at": nil,
-					"entry_date": "2026-07-01", "pain_level": 9, "mood_level": nil, "energy_level": nil, "notes": "",
-				},
+				"entity_id":   "019832e0-6c14-7000-8000-000000000003",
+				"client_rev":  "019832e0-6c14-7000-8000-000000000004",
+				"updated_at":  "2026-07-01T08:00:00Z",
+				"deleted":     false,
+				"ciphertext":  nil,
 			},
 		},
 	}, 200)
@@ -248,4 +251,16 @@ func TestConformance_InviteGate(t *testing.T) {
 	if reg["device"] == nil {
 		t.Fatalf("expected device in register response: %v", reg)
 	}
+}
+
+// sealedBlob returns a base64 payload shaped like a real sealed record:
+// 0x01 version || 12-byte nonce || ciphertext || 16-byte tag. The server never
+// decrypts it, so the contents are irrelevant - only the shape matters.
+func sealedBlob() string {
+	buf := make([]byte, 1+12+32+16)
+	buf[0] = 0x01
+	if _, err := rand.Read(buf[1:]); err != nil {
+		panic(err)
+	}
+	return base64.StdEncoding.EncodeToString(buf)
 }

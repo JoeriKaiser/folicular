@@ -13,7 +13,6 @@ import (
 
 	"folicular/internal/api/problem"
 	"folicular/internal/auth"
-	"folicular/internal/cyclecalc"
 	"folicular/internal/db/dbgen"
 	"folicular/internal/domain"
 )
@@ -244,121 +243,133 @@ func (d *Deps) HandleRevokeLink(w http.ResponseWriter, r *http.Request) {
 // are null - absence is deliberately indistinguishable from no data.
 
 type duoView struct {
-	LinkID          string              `json:"link_id"`
-	Role            string              `json:"role"`
-	AsOf            string              `json:"as_of"`
-	CycleDay        *int                `json:"cycle_day"`
-	PeriodEstimate  *periodEstimateView `json:"period_estimate"`
-	Mood            *sharedLevel        `json:"mood"`
-	Energy          *sharedLevel        `json:"energy"`
+	LinkID string `json:"link_id"`
+	Role   string `json:"role"`
+	AsOf   string `json:"as_of"`
+	// Sealed by the tracker's device under the Duo link key. The server
+	// relays it and cannot read it. Null until the tracker has published one.
+	Payload         []byte                `json:"payload"`
+	PayloadUpdatedAt *string              `json:"payload_updated_at"`
 	SupportRequests *[]supportRequestView `json:"support_requests"`
 }
 
-type periodEstimateView struct {
-	WindowStart string `json:"window_start"`
-	WindowEnd   string `json:"window_end"`
-}
-
-type sharedLevel struct {
-	Date  string `json:"date"`
-	Level int    `json:"level"`
-}
-
 type supportRequestView struct {
-	ID             string  `json:"id"`
-	AuthorRole     string  `json:"author_role"`
-	Kind           string  `json:"kind"`
-	Message        string  `json:"message"`
-	CreatedAt      string  `json:"created_at"`
-	AcknowledgedAt *string `json:"acknowledged_at"`
+	ID         string `json:"id"`
+	AuthorRole string `json:"author_role"`
+	Kind       string `json:"kind"`
+	// Sealed under the Duo link key like the projection itself.
+	MessageCiphertext []byte  `json:"message_ciphertext"`
+	CreatedAt         string  `json:"created_at"`
+	AcknowledgedAt    *string `json:"acknowledged_at"`
 }
 
-// HandleDuoView serves the projection. Private notes and raw observations
-// never pass through this endpoint.
+// HandleDuoView returns the sealed partner projection.
+//
+// The server no longer composes this view: it cannot read cycle starts or
+// daily entries. The tracker's device applies the grants locally, seals the
+// result under the Duo link key, and publishes it via HandlePutDuoPayload.
+// Grants are therefore enforced at composition time, which is strictly
+// stronger than server-side filtering - the server cannot leak what it never
+// received.
 func (d *Deps) HandleDuoView(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := auth.AccountID(r.Context())
 	ctx := r.Context()
 	now := time.Now().UTC()
 
-	// Partner first, then tracker.
-	link, err := d.Q.GetActiveDuoLinkByPartner(ctx, sql.NullString{String: accountID, Valid: true})
-	role := domain.DuoRolePartner
-	var ownerID string
-	if err != nil {
-		ownerLink, oerr := d.Q.GetActiveDuoLinkByOwner(ctx, accountID)
-		if oerr != nil {
-			problem.Write(w, r, problem.Status(http.StatusNotFound, "Aucun lien actif",
-				"Aucun lien Duo actif pour ce compte."))
-			return
-		}
-		link = ownerLink
-		role = domain.DuoRoleTracker
-		ownerID = ownerLink.OwnerAccountID
-	} else {
-		ownerID = link.OwnerAccountID
+	link, role, ok := d.activeLinkFor(ctx, accountID)
+	if !ok {
+		problem.Write(w, r, problem.Status(http.StatusNotFound, "Aucun lien actif",
+			"Aucun lien Duo actif pour ce compte."))
+		return
 	}
 
 	view := duoView{LinkID: link.ID, Role: role, AsOf: now.Format(time.RFC3339)}
 
-	// The support thread is visible to the tracker unconditionally (it is
-	// their link); the partner sees it only with the grant.
+	if payload, err := d.Q.GetDuoPayload(ctx, link.ID); err == nil {
+		view.Payload = payload.Ciphertext
+		updated := payload.UpdatedAt
+		view.PayloadUpdatedAt = &updated
+	} else if !isNotFound(err) {
+		d.Log.Error("duo payload lookup failed", "err", err)
+		problem.Write(w, r, problem.Internal())
+		return
+	}
+
+	// The support thread is sealed message-by-message; both members receive
+	// it and decrypt what they can.
 	thread, err := d.supportThread(ctx, link.ID)
 	if err != nil {
 		d.Log.Error("support thread failed", "err", err)
 		problem.Write(w, r, problem.Internal())
 		return
 	}
+	view.SupportRequests = &thread
 
-	if role == domain.DuoRoleTracker {
-		view.SupportRequests = &thread
-		writeJSON(w, http.StatusOK, view)
+	writeJSON(w, http.StatusOK, view)
+}
+
+// activeLinkFor resolves the caller's active link, partner first then tracker.
+func (d *Deps) activeLinkFor(ctx context.Context, accountID string) (dbgen.DuoLink, string, bool) {
+	if link, err := d.Q.GetActiveDuoLinkByPartner(ctx, sql.NullString{String: accountID, Valid: true}); err == nil {
+		return link, domain.DuoRolePartner, true
+	}
+	if link, err := d.Q.GetActiveDuoLinkByOwner(ctx, accountID); err == nil {
+		return link, domain.DuoRoleTracker, true
+	}
+	return dbgen.DuoLink{}, "", false
+}
+
+type putDuoPayloadRequest struct {
+	Payload []byte `json:"payload"`
+}
+
+// maxDuoPayloadBytes bounds one sealed projection.
+const maxDuoPayloadBytes = 64 * 1024
+
+// HandlePutDuoPayload lets the tracker publish the sealed projection for their
+// link. Only the tracker may publish: the projection is derived from their
+// records.
+func (d *Deps) HandlePutDuoPayload(w http.ResponseWriter, r *http.Request) {
+	accountID, _ := auth.AccountID(r.Context())
+	ctx := r.Context()
+
+	link, role, ok := d.activeLinkFor(ctx, accountID)
+	if !ok {
+		problem.Write(w, r, problem.Status(http.StatusNotFound, "Aucun lien actif",
+			"Aucun lien Duo actif pour ce compte."))
+		return
+	}
+	if role != domain.DuoRoleTracker {
+		problem.Write(w, r, problem.Status(http.StatusForbidden, "Accès refusé",
+			"Seul le suivi principal peut publier la projection Duo."))
 		return
 	}
 
-	grants, err := d.Q.ListActiveGrantsByLink(ctx, link.ID)
-	if err != nil {
-		d.Log.Error("grant list failed", "err", err)
+	var req putDuoPayloadRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if len(req.Payload) == 0 {
+		problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée",
+			"payload: requis"))
+		return
+	}
+	if len(req.Payload) > maxDuoPayloadBytes {
+		problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée",
+			"payload: charge utile trop volumineuse"))
+		return
+	}
+
+	if err := d.Q.UpsertDuoPayload(ctx, dbgen.UpsertDuoPayloadParams{
+		LinkID:     link.ID,
+		Ciphertext: req.Payload,
+		UpdatedAt:  time.Now().UTC().Format(time.RFC3339),
+	}); err != nil {
+		d.Log.Error("duo payload upsert failed", "err", err)
 		problem.Write(w, r, problem.Internal())
 		return
 	}
-	granted := make(map[string]bool, len(grants))
-	for _, g := range grants {
-		granted[g.Field] = true
-	}
-
-	if granted["cycle_day"] || granted["period_estimate"] {
-		starts := d.ownerCycleStarts(ctx, ownerID)
-		if granted["cycle_day"] {
-			view.CycleDay = cycleDayFor(starts, now.Format(time.DateOnly))
-		}
-		if granted["period_estimate"] {
-			pred := cyclecalc.Estimate(parseStarts(starts), now)
-			if pred.NextMenstruation != nil {
-				view.PeriodEstimate = &periodEstimateView{
-					WindowStart: pred.NextMenstruation.WindowStart,
-					WindowEnd:   pred.NextMenstruation.WindowEnd,
-				}
-			}
-		}
-	}
-
-	if granted["mood"] || granted["energy"] {
-		entry := d.latestDailyEntry(ctx, ownerID, now)
-		if entry != nil {
-			if granted["mood"] && entry.MoodLevel != nil {
-				view.Mood = &sharedLevel{Date: entry.EntryDate, Level: *entry.MoodLevel}
-			}
-			if granted["energy"] && entry.EnergyLevel != nil {
-				view.Energy = &sharedLevel{Date: entry.EntryDate, Level: *entry.EnergyLevel}
-			}
-		}
-	}
-
-	if granted["support_requests"] {
-		view.SupportRequests = &thread
-	}
-
-	writeJSON(w, http.StatusOK, view)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (d *Deps) supportThread(ctx context.Context, linkID string) ([]supportRequestView, error) {
@@ -372,51 +383,21 @@ func (d *Deps) supportThread(ctx context.Context, linkID string) ([]supportReque
 	for _, row := range rows {
 		out = append(out, supportRequestView{
 			ID: row.ID, AuthorRole: row.AuthorRole, Kind: row.Kind,
-			Message: row.Message, CreatedAt: row.CreatedAt, AcknowledgedAt: sp(row.AcknowledgedAt),
+			MessageCiphertext: row.MessageCiphertext,
+			CreatedAt:         row.CreatedAt,
+			AcknowledgedAt:    sp(row.AcknowledgedAt),
 		})
 	}
 	return out, nil
 }
 
-func (d *Deps) ownerCycleStarts(ctx context.Context, ownerID string) []string {
-	rows, err := d.Q.ListCycleStarts(ctx, ownerID)
-	if err != nil {
-		return nil
-	}
-	return rows
-}
-
-func parseStarts(starts []string) []time.Time {
-	out := make([]time.Time, 0, len(starts))
-	for _, s := range starts {
-		if t, err := domain.ParseDate(s); err == nil {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-// latestDailyEntry returns the owner's most recent daily entry within the
-// last 60 days, or nil.
-func (d *Deps) latestDailyEntry(ctx context.Context, ownerID string, now time.Time) *domain.DailyEntry {
-	rows, err := d.Q.ListDailyEntriesByRange(ctx, dbgen.ListDailyEntriesByRangeParams{
-		AccountID:  ownerID,
-		EntryDate:  now.AddDate(0, 0, -60).Format(time.DateOnly),
-		EntryDate_2: now.Format(time.DateOnly),
-	})
-	if err != nil || len(rows) == 0 {
-		return nil
-	}
-	e := rowToDailyEntry(rows[len(rows)-1])
-	return &e
-}
-
 // Support requests ---------------------------------------------------------
 
 type createSupportRequest struct {
-	LinkID  string `json:"link_id"`
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
+	LinkID string `json:"link_id"`
+	Kind   string `json:"kind"`
+	// Sealed under the Duo link key by the sender's device.
+	Message []byte `json:"message"`
 }
 
 // HandleCreateSupportRequest lets either member ask for support.
@@ -453,14 +434,14 @@ func (d *Deps) HandleCreateSupportRequest(w http.ResponseWriter, r *http.Request
 	now := time.Now().UTC().Format(time.RFC3339)
 	if err := d.Q.InsertSupportRequest(r.Context(), dbgen.InsertSupportRequestParams{
 		ID: id, LinkID: link.ID, AuthorRole: role, Kind: req.Kind,
-		Message: req.Message, CreatedAt: now,
+		MessageCiphertext: req.Message, CreatedAt: now,
 	}); err != nil {
 		d.Log.Error("support request insert failed", "err", err)
 		problem.Write(w, r, problem.Internal())
 		return
 	}
 	writeJSON(w, http.StatusCreated, supportRequestView{
-		ID: id, AuthorRole: role, Kind: req.Kind, Message: req.Message, CreatedAt: now,
+		ID: id, AuthorRole: role, Kind: req.Kind, MessageCiphertext: req.Message, CreatedAt: now,
 	})
 }
 

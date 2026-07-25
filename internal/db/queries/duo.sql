@@ -51,7 +51,7 @@ SELECT * FROM duo_grants
 WHERE link_id = ? AND revoked_at IS NULL;
 
 -- name: InsertSupportRequest :exec
-INSERT INTO support_requests (id, link_id, author_role, kind, message, created_at)
+INSERT INTO support_requests (id, link_id, author_role, kind, message_ciphertext, created_at)
 VALUES (?, ?, ?, ?, ?, ?);
 
 -- name: GetSupportRequestByID :one
@@ -65,3 +65,19 @@ SELECT * FROM support_requests
 WHERE link_id = ?
 ORDER BY created_at DESC
 LIMIT ?;
+
+-- Duo payload: sealed by the tracker's device under the link key. The server
+-- relays it and cannot read it.
+
+-- name: UpsertDuoPayload :exec
+INSERT INTO duo_payloads (link_id, ciphertext, updated_at)
+VALUES (?, ?, ?)
+ON CONFLICT(link_id) DO UPDATE SET
+    ciphertext = excluded.ciphertext,
+    updated_at = excluded.updated_at;
+
+-- name: GetDuoPayload :one
+SELECT * FROM duo_payloads WHERE link_id = ?;
+
+-- name: DeleteDuoPayload :exec
+DELETE FROM duo_payloads WHERE link_id = ?;

@@ -1,8 +1,6 @@
 package api
 
 import (
-	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -13,25 +11,13 @@ import (
 	"folicular/internal/api/problem"
 	"folicular/internal/auth"
 	"folicular/internal/db/dbgen"
-	"folicular/internal/domain"
 )
 
-// builtinSymptoms seeds the canonical symptom catalog for a new account.
-// Labels are French-first. The client must adopt these definitions (matched
-// by key) rather than creating its own built-in rows, so all devices
-// converge on one catalog.
-var builtinSymptoms = []domain.SymptomDefinition{
-	{Key: "cramps", Label: "Crampes", Category: "pain"},
-	{Key: "headache", Label: "Maux de tête", Category: "pain"},
-	{Key: "back_pain", Label: "Douleur lombaire", Category: "pain"},
-	{Key: "mood_changes", Label: "Changements d'humeur", Category: "mood"},
-	{Key: "anxiety", Label: "Anxiété", Category: "mood"},
-	{Key: "fatigue", Label: "Fatigue", Category: "energy"},
-	{Key: "bloating", Label: "Ballonnements", Category: "physical"},
-	{Key: "acne", Label: "Acné", Category: "physical"},
-	{Key: "breast_tenderness", Label: "Seins sensibles", Category: "physical"},
-	{Key: "cervical_fluid", Label: "Glaire cervicale", Category: "cervical_fluid"},
-}
+// The built-in symptom catalog used to be seeded here. Under end-to-end
+// encryption the server cannot create records: it has no key, so anything it
+// wrote would be unreadable by the client and would corrupt the change log.
+// The client now seeds its own catalog and pushes it sealed, which is also why
+// symptom definitions no longer need a server-side canonical vocabulary.
 
 type registerRequest struct {
 	DeviceName string `json:"device_name"`
@@ -100,9 +86,6 @@ func (d *Deps) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		}); err != nil {
 			return err
 		}
-		if err := seedBuiltinSymptoms(r.Context(), q, accountID, now); err != nil {
-			return err
-		}
 		return q.InsertDevice(r.Context(), dbgen.InsertDeviceParams{
 			ID: deviceID, AccountID: accountID, Name: req.DeviceName,
 			TokenHash: tokenHash, CreatedAt: now,
@@ -121,42 +104,7 @@ func (d *Deps) HandleRegister(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// seedBuiltinSymptoms inserts the canonical catalog and records each row in
-// the change log so every device converges on the same definitions.
-func seedBuiltinSymptoms(ctx context.Context, q *dbgen.Queries, accountID, now string) error {
-	for _, s := range builtinSymptoms {
-		s.ID = uuid.NewString()
-		s.ClientRev = uuid.NewString()
-		s.CreatedAt = now
-		s.UpdatedAt = now
-		s.Builtin = true
-		s.Active = true
-		if err := s.Validate(); err != nil {
-			return err
-		}
-		if _, err := q.UpsertSymptomDefinition(ctx, symptomDefParams(accountID, s)); err != nil {
-			return err
-		}
-		payload, err := json.Marshal(s)
-		if err != nil {
-			return err
-		}
-		if _, err := q.RecordChange(ctx, dbgen.RecordChangeParams{
-			AccountID:  accountID,
-			EntityType: domain.TypeSymptomDefinition,
-			EntityID:   s.ID,
-			Deleted:    0,
-			Payload:    ns(stringPtr(string(payload))),
-			UpdatedAt:  s.UpdatedAt,
-			RecordedAt: now,
-		}); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
-func stringPtr(s string) *string { return &s }
 
 type addDeviceRequest struct {
 	Code       string `json:"code"`

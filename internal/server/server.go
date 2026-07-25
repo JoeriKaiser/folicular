@@ -67,9 +67,10 @@ func NewRouter(log *slog.Logger, q *dbgen.Queries, db *sql.DB, version, pairingB
 			r.Post("/sync/push", deps.HandleSyncPush)
 			r.Get("/sync/pull", deps.HandleSyncPull)
 
-			r.Get("/cycles", deps.HandleListCycles)
-			r.Get("/days", deps.HandleDays)
-			r.Get("/predictions/current", deps.HandlePredictionsCurrent)
+			// /cycles, /days and /predictions/current were removed with the
+			// end-to-end encryption migration: all three required the server
+			// to read record content, which it no longer can. Reads and
+			// estimates are served from the client's local store.
 
 			// Duo: purpose-designed partner surface. Pairing codes are
 			// short-lived and single-use; acceptance is rate limited.
@@ -79,6 +80,7 @@ func NewRouter(log *slog.Logger, q *dbgen.Queries, db *sql.DB, version, pairingB
 			r.Patch("/duo/links/{linkID}/grants", deps.HandlePatchGrants)
 			r.Delete("/duo/links/{linkID}", deps.HandleRevokeLink)
 			r.Get("/duo/view", deps.HandleDuoView)
+			r.Put("/duo/payload", deps.HandlePutDuoPayload)
 			r.Post("/duo/support-requests", deps.HandleCreateSupportRequest)
 			r.Patch("/duo/support-requests/{requestID}/ack", deps.HandleAckSupportRequest)
 		})

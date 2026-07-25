@@ -283,68 +283,6 @@ paths:
               schema: { $ref: "#/components/schemas/SyncPullResult" }
         default: { $ref: "#/components/responses/Problem" }
 
-  /v1/cycles:
-    get:
-      tags: [reads]
-      operationId: listCycles
-      summary: Live cycles overlapping a date range
-      parameters:
-        - $ref: "#/components/parameters/From"
-        - $ref: "#/components/parameters/To"
-      responses:
-        "200":
-          description: Cycles, newest first
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [cycles]
-                properties:
-                  cycles:
-                    type: array
-                    items: { $ref: "#/components/schemas/CycleView" }
-        default: { $ref: "#/components/responses/Problem" }
-
-  /v1/days:
-    get:
-      tags: [reads]
-      operationId: listDays
-      summary: Merged daily observation view for a date range
-      parameters:
-        - $ref: "#/components/parameters/From"
-        - $ref: "#/components/parameters/To"
-      responses:
-        "200":
-          description: Days with any observation, ascending
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [days]
-                properties:
-                  days:
-                    type: array
-                    items: { $ref: "#/components/schemas/DayView" }
-        default: { $ref: "#/components/responses/Problem" }
-
-  /v1/predictions/current:
-    get:
-      tags: [estimates]
-      operationId: predictionsCurrent
-      summary: On-demand cycle estimates (ranges with uncertainty)
-      description: |
-        Computed from the account's own recorded cycle starts. With fewer
-        than 3 starts, windows are null and no population default is
-        substituted. Ovulation and fertile windows are capped at `low`
-        confidence: calendar timing alone is a weak signal.
-      responses:
-        "200":
-          description: Current estimates
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Prediction" }
-        default: { $ref: "#/components/responses/Problem" }
-
   /v1/duo/invitations:
     post:
       tags: [duo]
@@ -455,10 +393,10 @@ paths:
       operationId: duoView
       summary: Role-aware partner projection
       description: |
-        Partner: only fields with an active grant; ungranted fields are
-        null (absence deliberately indistinguishable from no data).
-        Tracker: data fields null, support thread always visible. Private
-        notes and raw observations never pass through this endpoint.
+        Returns the sealed projection published by the tracker's device, plus
+        the sealed support thread. The server relays ciphertext and cannot read
+        either. Private notes and raw observations are never included, because
+        the tracker's device never encrypts them into the payload.
       responses:
         "200":
           description: Projection
@@ -466,6 +404,32 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/DuoView" }
         "404": { $ref: "#/components/responses/Problem" }
+        default: { $ref: "#/components/responses/Problem" }
+
+  /v1/duo/payload:
+    put:
+      tags: [duo]
+      operationId: putDuoPayload
+      summary: Publish the sealed partner projection (tracker only)
+      description: |
+        The tracker's device composes the projection from its own records,
+        applies the active grants, seals the result under the Duo link key, and
+        publishes it here. Only the tracker may publish: the projection derives
+        from their records. Plaintext shape: DuoViewContent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [payload]
+              properties:
+                payload: { type: string, format: byte }
+      responses:
+        "204": { description: Published }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "422": { $ref: "#/components/responses/Problem" }
         default: { $ref: "#/components/responses/Problem" }
 
   /v1/duo/support-requests:
@@ -483,7 +447,10 @@ paths:
               properties:
                 link_id: { $ref: "#/components/schemas/UUID" }
                 kind: { $ref: "#/components/schemas/SupportKind" }
-                message: { type: string, maxLength: 1000 }
+                message:
+                  type: string
+                  format: byte
+                  description: Sealed under the Duo link key by the sender's device
       responses:
         "201":
           description: Request created
@@ -529,17 +496,6 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/UUID" }
-    From:
-      name: from
-      in: query
-      description: Inclusive start date (defaults vary per endpoint)
-      schema: { type: string, format: date }
-    To:
-      name: to
-      in: query
-      description: Inclusive end date
-      schema: { type: string, format: date }
-
   responses:
     Problem:
       description: RFC 9457 problem details
@@ -604,22 +560,38 @@ components:
 
     Settings:
       type: object
-      required: [locale, time_zone, life_stage, tracking_focus, updated_at]
+      required: [updated_at]
+      description: |
+        Sealed settings blob. Life stage and tracking focuses (pms, pmdd,
+        endometriosis, pcos) are Art. 9 health data, so they are encrypted
+        client-side like every other record and the server stores an opaque
+        blob. Plaintext shape: see SettingsContent.
       properties:
-        locale: { type: string, example: fr }
-        time_zone: { type: string, example: Europe/Paris }
-        life_stage: { $ref: "#/components/schemas/LifeStage" }
-        tracking_focus:
-          type: array
-          items: { $ref: "#/components/schemas/TrackingFocus" }
+        settings:
+          type: string
+          format: byte
+          nullable: true
         updated_at: { type: string, format: date-time }
 
     SettingsPatch:
       type: object
-      description: Partial settings update; merged state is validated as a whole
+      required: [settings]
+      description: |
+        Full replacement of the sealed settings blob. There is no server-side
+        merge: merging requires reading the fields, which the server cannot do.
+        The client decrypts, merges, reseals, and sends the whole blob.
       properties:
-        locale: { type: string }
-        time_zone: { type: string }
+        settings: { type: string, format: byte }
+
+    SettingsContent:
+      type: object
+      description: |
+        Plaintext shape sealed inside Settings.settings. Never transmitted in
+        the clear; kept here so clients agree on the format.
+      required: [locale, time_zone, life_stage, tracking_focus]
+      properties:
+        locale: { type: string, example: fr }
+        time_zone: { type: string, example: Europe/Paris }
         life_stage: { $ref: "#/components/schemas/LifeStage" }
         tracking_focus:
           type: array
@@ -657,18 +629,38 @@ components:
 
     SyncChangeInput:
       type: object
-      required: [entity_type, data]
+      required: [entity_type, entity_id, client_rev, updated_at, deleted, ciphertext]
+      description: |
+        One end-to-end encrypted record change.
+
+        Record content is sealed on the client and opaque to this server (see
+        the client repo's docs/architecture/E2EE_DESIGN.md). The routing fields
+        below are therefore carried in plaintext: the server needs them to
+        target the upsert, order the last-write-wins guard, and append the
+        change log, and it can no longer read them out of the payload.
       properties:
         entity_type: { $ref: "#/components/schemas/EntityType" }
-        data:
-          type: object
+        entity_id: { $ref: "#/components/schemas/UUID" }
+        client_rev:
+          allOf: [{ $ref: "#/components/schemas/UUID" }]
+          description: Fresh per local edit; the tiebreak after updated_at
+        updated_at:
+          type: string
+          format: date-time
           description: |
-            The full record for entity_type, including the envelope (id,
-            client_rev, created_at, updated_at, deleted_at). Shape per type:
-            CycleData, BleedingObservationData, DailyEntryData,
-            SymptomDefinitionData, SymptomLogData, BiomarkerObservationData,
-            MedicationLogData. Deletes carry deleted_at set plus the last
-            known data (tombstone semantics).
+            RFC 3339 UTC, truncated to the minute by the client so a pushed
+            batch does not reveal when each observation was entered.
+        deleted:
+          type: boolean
+          description: Tombstone marker; ciphertext is null when true
+        ciphertext:
+          type: string
+          format: byte
+          nullable: true
+          description: |
+            Base64 of `0x01 || nonce(12) || AES-256-GCM(record JSON) || tag(16)`.
+            Associated data binds "<entity_type> <entity_id> <client_rev>", so
+            relocating a payload onto another record fails authentication.
 
     AppliedChange:
       type: object
@@ -688,14 +680,21 @@ components:
 
     ConflictChange:
       type: object
-      required: [entity_type, entity_id, reason, current]
+      required: [entity_type, entity_id, reason, current_client_rev, current_updated_at]
       properties:
         entity_type: { $ref: "#/components/schemas/EntityType" }
         entity_id: { $ref: "#/components/schemas/UUID" }
         reason: { type: string, enum: [superseded] }
-        current:
-          type: object
-          description: The server's current record (adopt it; nothing is silently lost)
+        current_client_rev: { $ref: "#/components/schemas/UUID" }
+        current_updated_at: { type: string, format: date-time }
+        current_deleted: { type: boolean }
+        current_ciphertext:
+          type: string
+          format: byte
+          nullable: true
+          description: |
+            The server's current sealed record. The client adopts it by
+            decrypting locally; nothing is silently lost. Null for tombstones.
 
     SyncPushResult:
       type: object
@@ -714,17 +713,21 @@ components:
 
     SyncPullChange:
       type: object
-      required: [seq, entity_type, entity_id, deleted, updated_at]
+      required: [seq, entity_type, entity_id, deleted, updated_at, client_rev]
       properties:
         seq: { type: integer, format: int64 }
         entity_type: { $ref: "#/components/schemas/EntityType" }
         entity_id: { $ref: "#/components/schemas/UUID" }
         deleted: { type: boolean }
         updated_at: { type: string, format: date-time }
-        data:
-          type: object
+        client_rev:
+          allOf: [{ $ref: "#/components/schemas/UUID" }]
+          description: Required to rebuild the AEAD associated data on decrypt
+        ciphertext:
+          type: string
+          format: byte
           nullable: true
-          description: Full record snapshot; null when deleted
+          description: Sealed record snapshot; null when deleted
 
     SyncPullResult:
       type: object
@@ -749,6 +752,12 @@ components:
       type: string
       enum: [manual, import, estimated]
 
+    # --- Sealed payload shapes ------------------------------------------
+    # The schemas below are deliberately NOT referenced by any path. They
+    # describe the plaintext *inside* SyncChangeInput.ciphertext, which this
+    # server never decrypts. They remain in the contract because they are a
+    # real shared format between client versions and because the Android
+    # client generates its record types from them.
     CycleData:
       type: object
       description: |
@@ -899,118 +908,6 @@ components:
         kind: { $ref: "#/components/schemas/MedicationKind" }
         notes: { type: string, maxLength: 5000 }
 
-    CycleView:
-      type: object
-      required: [id, start_date, certainty, source, notes, updated_at]
-      properties:
-        id: { $ref: "#/components/schemas/UUID" }
-        start_date: { type: string, format: date }
-        end_date: { type: string, format: date, nullable: true }
-        length_days: { type: integer, nullable: true }
-        bleeding_days: { type: integer, nullable: true }
-        certainty: { $ref: "#/components/schemas/Certainty" }
-        source: { $ref: "#/components/schemas/RecordSource" }
-        notes: { type: string }
-        updated_at: { type: string, format: date-time }
-
-    DayView:
-      type: object
-      required: [date, symptoms, medications]
-      properties:
-        date: { type: string, format: date }
-        cycle_day: { type: integer, nullable: true }
-        bleeding:
-          type: object
-          nullable: true
-          required: [flow, intermenstrual]
-          properties:
-            flow: { $ref: "#/components/schemas/Flow" }
-            intermenstrual: { type: boolean }
-            product_count: { type: integer, nullable: true }
-        entry:
-          type: object
-          nullable: true
-          required: [notes]
-          properties:
-            pain_level: { type: integer, nullable: true }
-            mood_level: { type: integer, nullable: true }
-            energy_level: { type: integer, nullable: true }
-            notes: { type: string }
-        symptoms:
-          type: array
-          items:
-            type: object
-            required: [key, severity, notes]
-            properties:
-              key: { type: string }
-              severity: { type: integer }
-              notes: { type: string }
-        biomarkers:
-          type: object
-          nullable: true
-          properties:
-            bbt_celsius: { type: number, format: double, nullable: true }
-            cervical_fluid: { $ref: "#/components/schemas/CervicalFluid" }
-            cervix_position: { $ref: "#/components/schemas/CervixPosition" }
-            cervix_firmness: { $ref: "#/components/schemas/CervixFirmness" }
-        medications:
-          type: array
-          items:
-            type: object
-            required: [name, dose, kind]
-            properties:
-              name: { type: string }
-              dose: { type: string }
-              kind: { $ref: "#/components/schemas/MedicationKind" }
-
-    Confidence:
-      type: string
-      description: Uncertainty label; "certain" does not exist by design
-      enum: [insufficient, low, moderate]
-
-    Prediction:
-      type: object
-      required: [generated_at, method, basis, disclaimer]
-      properties:
-        generated_at: { type: string, format: date-time }
-        method: { type: string, example: cycle_length_median_v1 }
-        basis:
-          type: object
-          required: [cycle_count]
-          properties:
-            cycle_count: { type: integer }
-            median_length_days: { type: integer }
-            variability_days: { type: integer }
-        next_menstruation:
-          type: object
-          nullable: true
-          required: [window_start, central_date, window_end, confidence]
-          properties:
-            window_start: { type: string, format: date }
-            central_date: { type: string, format: date }
-            window_end: { type: string, format: date }
-            confidence: { $ref: "#/components/schemas/Confidence" }
-        ovulation_estimate:
-          type: object
-          nullable: true
-          required: [window_start, central_date, window_end, confidence]
-          properties:
-            window_start: { type: string, format: date }
-            central_date: { type: string, format: date }
-            window_end: { type: string, format: date }
-            confidence: { $ref: "#/components/schemas/Confidence" }
-        fertile_window_estimate:
-          type: object
-          nullable: true
-          required: [window_start, window_end, confidence]
-          properties:
-            window_start: { type: string, format: date }
-            window_end: { type: string, format: date }
-            confidence: { $ref: "#/components/schemas/Confidence" }
-        disclaimer:
-          type: string
-          description: French server-authored non-medical disclaimer
-
     Invitation:
       type: object
       required: [link_id, pairing_code, pairing_url, expires_at]
@@ -1047,22 +944,52 @@ components:
 
     SupportRequest:
       type: object
-      required: [id, author_role, kind, message, created_at]
+      required: [id, author_role, kind, created_at]
       properties:
         id: { $ref: "#/components/schemas/UUID" }
         author_role: { $ref: "#/components/schemas/DuoRole" }
         kind: { $ref: "#/components/schemas/SupportKind" }
-        message: { type: string }
+        message_ciphertext:
+          type: string
+          format: byte
+          nullable: true
+          description: Sealed under the Duo link key by the sender's device
         created_at: { type: string, format: date-time }
         acknowledged_at: { type: string, format: date-time, nullable: true }
 
     DuoView:
       type: object
       required: [link_id, role, as_of]
+      description: |
+        The server no longer composes this view: it cannot read cycle starts or
+        daily entries. The tracker's device applies the grants locally, seals
+        the result under the Duo link key, and publishes it via
+        PUT /v1/duo/payload. Grants are therefore enforced at composition time,
+        which is stronger than server-side filtering - the server cannot leak
+        what it never received.
       properties:
         link_id: { $ref: "#/components/schemas/UUID" }
         role: { $ref: "#/components/schemas/DuoRole" }
         as_of: { type: string, format: date-time }
+        payload:
+          type: string
+          format: byte
+          nullable: true
+          description: Sealed projection; null until the tracker publishes one
+        payload_updated_at: { type: string, format: date-time, nullable: true }
+        support_requests:
+          type: array
+          nullable: true
+          items: { $ref: "#/components/schemas/SupportRequest" }
+
+    DuoViewContent:
+      type: object
+      description: |
+        Plaintext shape sealed inside DuoView.payload. Never transmitted in the
+        clear; kept here so tracker and partner clients agree on the format.
+        Only granted fields are present - an ungranted field is absent because
+        it was never encrypted, not filtered afterwards.
+      properties:
         cycle_day: { type: integer, nullable: true }
         period_estimate:
           type: object
@@ -1073,10 +1000,6 @@ components:
             window_end: { type: string, format: date }
         mood: { $ref: "#/components/schemas/SharedLevel" }
         energy: { $ref: "#/components/schemas/SharedLevel" }
-        support_requests:
-          type: array
-          nullable: true
-          items: { $ref: "#/components/schemas/SupportRequest" }
 
     SharedLevel:
       type: object

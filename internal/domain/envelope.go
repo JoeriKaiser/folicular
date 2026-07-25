@@ -73,6 +73,30 @@ func isInstant(s string) bool {
 	return err == nil
 }
 
+// IsInstant reports whether s is a valid RFC 3339 instant.
+func IsInstant(s string) bool { return isInstant(s) }
+
+// IsUUID reports whether s is a valid UUID.
+func IsUUID(s string) bool {
+	_, err := uuid.Parse(s)
+	return err == nil
+}
+
+// IsEntityType reports whether s is a synchronized entity type.
+//
+// With end-to-end encryption the server validates the routing envelope and
+// nothing else: the payload is ciphertext it cannot read, so content rules
+// (ranges, enums, cross-field checks) belong to the client, which is the only
+// party able to apply them.
+func IsEntityType(s string) bool {
+	for _, t := range EntityTypes {
+		if s == t {
+			return true
+		}
+	}
+	return false
+}
+
 func isDate(s string) bool {
 	_, err := time.Parse(time.DateOnly, s)
 	return err == nil
