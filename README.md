@@ -1,12 +1,10 @@
 # folicular
 
 Backend service for **Luteal**, the French-first, private menstrual cycle tracker
-and consensual Duo companion. folicular provides anonymous account identity,
-offline-first delta synchronization for the Android client, server-authoritative
-validation, and clearly labeled cycle estimates.
+and consensual Duo companion. folicular provides pseudonymised account identity,
+offline-first delta synchronization with end-to-end encrypted records for the Android client,
+and consensual Duo pairing and support requests.
 
-Status: **design phase**. The API contract, research-backed data model, and a
-compiling skeleton exist; nothing here is production-hardened yet.
 
 ## Principles
 
@@ -104,4 +102,16 @@ scripts/               smoke test
 
 ## Related repositories
 
-- Android client: `~/AndroidStudioProjects/luteal` (package `fr.luteal`)
+- Android client: [Luteal](https://github.com/JoeriKaiser/luteal) (package `fr.luteal`)
+
+## Licence
+
+GNU Affero General Public License v3.0 or later. See [LICENSE](LICENSE).
+
+folicular is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. It is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
