@@ -42,10 +42,11 @@ never be used to infer, screen for, or announce a condition.
 |----|--------|-----------|--------|-------------|-------------------|
 | S20 | WHO endometriosis fact sheet | World Health Organization. *Endometriosis.* Fact sheet, 2023. https://www.who.int/news-room/fact-sheets/detail/endometriosis | Verified | 2026-07-21 | Neutral terminology for the `endometriosis` tracking focus; pain and bleeding observations are configurable, not diagnostic |
 | S21 | WHO PCOS fact sheet | World Health Organization. *Polycystic ovary syndrome.* Fact sheet. https://www.who.int/news-room/fact-sheets/detail/polycystic-ovary-syndrome | Verified | 2026-07-21 | Neutral terminology for the `pcos` tracking focus; irregular-cycle inclusion as first-class data, not anomaly |
-| S22 | NHS pre-menstrual syndrome | NHS. *Pre-menstrual syndrome.* https://www.nhs.uk/conditions/pre-menstrual-syndrome/ | Verified | 2026-07-21 | Observation vocabulary for the `pms`/`pmdd` tracking focuses; prospective daily charting support only |
+| S22 | NHS pre-menstrual syndrome | NHS. *Pre-menstrual syndrome.* https://www.nhs.uk/conditions/pre-menstrual-syndrome/ | Verified | 2026-07-21 | Observation vocabulary for the `pms`/`pmdd` tracking focuses and base catalog (mood, fatigue, bloating, cramping, abdominal pain, muscle aches, backache, nausea, digestive changes, sleep, breast tenderness, headache, skin) |
 | S23 | NHS periods overview | NHS. *Periods.* https://www.nhs.uk/conditions/periods/ | Verified | 2026-07-21 | Plain-language reference for bleeding duration and product-related fields |
 | S24 | HAS endometriosis care pathway | Haute Autorité de Santé. *Parcours de soins - Endométriose.* 2017 (updated). https://www.has-sante.fr/jcms/c_2721628/fr/parcours-de-soins-endometriiose | Candidate | 2026-07-21 | French care-context vocabulary; review before any user-facing educational content |
 | S25 | DSM-5 PMDD criteria (reference only) | American Psychiatric Association. *DSM-5.* 2013. Premenstrual dysphoric disorder criteria require prospective daily charting over at least two cycles. | Candidate | 2026-07-21 | Justifies storing prospective daily observations with dates and severities; explicitly NOT implemented as detection logic |
+| S26 | ACOG premenstrual syndrome guidance | ACOG. *Premenstrual Syndrome (PMS).* https://www.acog.org/womens-health/faqs/premenstrual-syndrome-pms | Verified | 2026-08-13 | Premenstrual lifestyle and nutrition support: hydration, sodium moderation, complex carbohydrates |
 
 ## Privacy and data protection
 
