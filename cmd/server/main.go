@@ -44,6 +44,13 @@ func main() {
 	} else {
 		log.Warn("registration is OPEN: set FOLICULAR_INVITE_CODES to restrict account creation")
 	}
+	if cfg.IsDefaultPairingBaseURL() {
+		if len(cfg.InviteCodes) > 0 || len(cfg.TrustedProxies) > 0 {
+			log.Info("using default pairing base URL; set FOLICULAR_PAIRING_BASE_URL to your public domain if using Duo partner pairing", "url", cfg.PairingBaseURL)
+		}
+	} else {
+		log.Info("pairing base URL configured", "url", cfg.PairingBaseURL)
+	}
 
 	handler := server.NewRouter(log, dbgen.New(sqlDB), sqlDB, version, cfg.PairingBaseURL, cfg.TrustedProxies, cfg.InviteCodes)
 	srv := &http.Server{

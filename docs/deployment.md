@@ -1,15 +1,18 @@
 # Deployment
 
+> **Looking to self-host folicular for personal or family use?**
+> See the comprehensive [Self-Hosting Guide](self-hosting.md) for Docker Compose, Caddy automated TLS, reverse proxy configurations, homelab/Tailscale setups, and connecting the Luteal F-Droid Android app.
+
+This document describes production deployment on a VPS running **[Coolify](https://coolify.io)** as a self-hosted PaaS, along with operational practices and the F-Droid client security posture.
+
 Production target: a single small VPS (2 vCPU / 2 GB RAM is far more than
-enough) running **[Coolify](https://coolify.io)** as a self-hosted PaaS.
-Coolify builds the container from this repository, terminates TLS with
-Let's Encrypt through its proxy, and manages redeploys and health checks.
-One container, one SQLite file on a persistent volume.
+enough) running Coolify. Coolify builds the container from this repository,
+terminates TLS with Let's Encrypt through its proxy, and manages redeploys and
+health checks. One container, one SQLite file on a persistent volume.
 
 Distribution context: the Android client ships **F-Droid only** (no Google
 Play). This matters for the security posture below — see
 [Security posture for an F-Droid client](#security-posture-for-an-f-droid-client).
-
 ## Threat-aware baseline
 
 Menstrual and symptom data are health data (S30, CNIL). **Record content is

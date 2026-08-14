@@ -11,6 +11,9 @@ import (
 	"folicular/internal/auth"
 )
 
+// DefaultPairingBaseURL is the default upstream service for Duo pairing links.
+const DefaultPairingBaseURL = "https://luteal-duo.waldemar.site"
+
 type Config struct {
 	Addr           string
 	DBPath         string
@@ -29,16 +32,26 @@ type Config struct {
 }
 
 func Load() Config {
+	pairingBaseURL := strings.TrimRight(strings.TrimSpace(env("FOLICULAR_PAIRING_BASE_URL", DefaultPairingBaseURL)), "/")
+	if pairingBaseURL == "" {
+		pairingBaseURL = DefaultPairingBaseURL
+	}
 	return Config{
 		Addr:     env("FOLICULAR_ADDR", ":8080"),
 		DBPath:   env("FOLICULAR_DB_PATH", "folicular.db"),
 		LogLevel: parseLevel(env("FOLICULAR_LOG_LEVEL", "info")),
 		// Base URL used to build Duo pairing links (rendered as QR codes
 		// and shareable links by the client). Change per deployment.
-		PairingBaseURL: env("FOLICULAR_PAIRING_BASE_URL", "https://luteal-duo.waldemar.site"),
+		PairingBaseURL: pairingBaseURL,
 		TrustedProxies: parseCIDRs(env("FOLICULAR_TRUSTED_PROXIES", "")),
 		InviteCodes:    parseInviteCodes(env("FOLICULAR_INVITE_CODES", "")),
 	}
+}
+
+// IsDefaultPairingBaseURL reports whether the configured PairingBaseURL is
+// using the default upstream demo pairing service.
+func (c Config) IsDefaultPairingBaseURL() bool {
+	return c.PairingBaseURL == DefaultPairingBaseURL
 }
 
 // parseCIDRs parses a comma-separated list of IPs or CIDR ranges into

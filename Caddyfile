@@ -1,0 +1,13 @@
+# Caddy configuration for folicular reverse proxy
+# Supports {$DOMAIN} environment variable (defaults to localhost for local testing).
+
+{$DOMAIN:localhost} {
+    encode zstd gzip
+
+    reverse_proxy folicular:8080 {
+        header_up Host {host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}

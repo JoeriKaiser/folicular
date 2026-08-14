@@ -1,0 +1,51 @@
+# Turnkey 2-container deployment with Caddy providing automated Let's Encrypt TLS.
+#
+# Usage:
+#   cp .env.example .env
+#   # Edit DOMAIN in .env (e.g. DOMAIN=api.example.com)
+#   docker compose -f docker-compose.caddy.yml up -d
+
+services:
+  folicular:
+    image: ghcr.io/joerikaiser/folicular:latest
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      FOLICULAR_ADDR: ":8080"
+      FOLICULAR_DB_PATH: /data/folicular.db
+      FOLICULAR_LOG_LEVEL: ${FOLICULAR_LOG_LEVEL:-info}
+      FOLICULAR_INVITE_CODES: ${FOLICULAR_INVITE_CODES:-}
+      FOLICULAR_PAIRING_BASE_URL: ${FOLICULAR_PAIRING_BASE_URL:-}
+      FOLICULAR_TRUSTED_PROXIES: ${FOLICULAR_TRUSTED_PROXIES:-172.16.0.0/12,127.0.0.1}
+    expose:
+      - "8080"
+    volumes:
+      - folicular-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
+
+  caddy:
+    image: caddy:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      folicular:
+        condition: service_healthy
+
+volumes:
+  folicular-data:
+  caddy-data:
+  caddy-config:

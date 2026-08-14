@@ -33,7 +33,33 @@ and consensual Duo pairing and support requests.
 | Rate limiting | `golang.org/x/time/rate`                           |
 | Errors        | RFC 9457 `application/problem+json`                |
 
-## Quickstart
+## Self-Hosting
+
+folicular is packaged for effortless self-hosting on x86_64 and ARM64 (Raspberry Pi, VPS, homelab). Prebuilt multi-arch images are published to GitHub Container Registry (`ghcr.io/joerikaiser/folicular:latest`).
+
+### Standalone Quickstart (Docker Compose)
+
+```sh
+curl -sSL -O https://raw.githubusercontent.com/JoeriKaiser/folicular/main/docker-compose.selfhost.yml
+curl -sSL -O https://raw.githubusercontent.com/JoeriKaiser/folicular/main/.env.example
+cp .env.example .env
+docker compose -f docker-compose.selfhost.yml up -d
+```
+
+### Turnkey Automated HTTPS (Docker Compose + Caddy)
+
+```sh
+curl -sSL -O https://raw.githubusercontent.com/JoeriKaiser/folicular/main/docker-compose.caddy.yml
+curl -sSL -O https://raw.githubusercontent.com/JoeriKaiser/folicular/main/Caddyfile
+curl -sSL -O https://raw.githubusercontent.com/JoeriKaiser/folicular/main/.env.example
+cp .env.example .env
+# Set DOMAIN=folicular.example.com in .env
+docker compose -f docker-compose.caddy.yml up -d
+```
+
+For reverse proxy integration (Traefik, Nginx Proxy Manager), homelab / Tailscale private networking, Android TLS requirements, backups (Litestream), and step-by-step Luteal F-Droid app configuration, see the [Self-Hosting Guide](docs/self-hosting.md).
+
+## Development
 
 ```sh
 make tidy        # fetch dependencies
@@ -48,10 +74,9 @@ Smoke test the core flow:
 make smoke
 ```
 
-### Running with Docker Compose
+### Local Docker Compose
 
-A containerized dev / real-device-trial setup is provided: a pure-Go static
-image running as a non-root user, with the SQLite database in a named volume.
+A containerized local development setup is provided:
 
 ```sh
 docker compose up -d --build        # or: make compose-up
@@ -75,15 +100,15 @@ device) or the host's LAN IP; the emulator uses `http://10.0.2.2:8080`.
 
 ## Documentation
 
+- [`docs/self-hosting.md`](docs/self-hosting.md) - comprehensive guide for self-hosters and F-Droid users (Docker Compose, Caddy, Tailscale, backups, app connection)
+- [`docs/deployment.md`](docs/deployment.md) - production deployment on Coolify (with a bare-metal fallback), backups, and the F-Droid-aware security posture
 - [`AGENTS.md`](AGENTS.md) - agent and contributor rules for this repository
 - [`docs/architecture.md`](docs/architecture.md) - system design and decisions
 - [`docs/api.md`](docs/api.md) - HTTP API contract prose (auth, sync, reads, Duo)
 - [`openapi/openapi.yaml`](openapi/openapi.yaml) - machine-readable contract (client DTOs are generated from it; guarded by `internal/contract` tests)
 - [`docs/data-model.md`](docs/data-model.md) - schema rationale, research mapping
-- [`docs/deployment.md`](docs/deployment.md) - production deployment on Coolify (with a bare-metal fallback), backups, and the F-Droid-aware security posture
 - [`docs/research/SOURCES.md`](docs/research/SOURCES.md) - source register
 - `docs/research/0*.md` - topic notes linking research to schema decisions
-
 ## Layout
 
 ```
