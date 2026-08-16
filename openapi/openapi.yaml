@@ -27,10 +27,6 @@ tags:
     description: Account and server-authoritative settings
   - name: sync
     description: Offline-first delta synchronization
-  - name: reads
-    description: Read models over validated server state
-  - name: estimates
-    description: Cycle estimates (never facts, never medical conclusions)
   - name: duo
     description: Consensual partner surface with per-field grants
   - name: ops

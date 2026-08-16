@@ -28,7 +28,7 @@ sqlc:
 
 ci: vet test build
 
-# Starts the server and exercises the core API flow (register, push, pull, predictions).
+# Starts the server and exercises the core API flow (register, push, pull, conflict, duo).
 smoke: build
 	./scripts/smoke.sh
 

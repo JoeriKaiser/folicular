@@ -2,124 +2,70 @@
 
 ## Position
 
-folicular is the **source of truth for synchronized Luteal data**: canonical
-schema, validation, conflict resolution, and estimates. The Android client is
-offline-first for display (Room is its local cache) but conforms to this
-service's contract and accepts its resolved state on conflict.
+folicular provides **anonymous account identity, transport-ordered delta synchronization, and consensual Duo companion relay**. Under end-to-end encryption, health records and account settings are sealed on the client (AES-256-GCM); the server acts as an authoritative conflict arbiter and ordering service for opaque ciphertext envelopes.
 
-## Runtime shape
+The Android client (package `fr.luteal`) is offline-first for display and local writes (using Room as its local store), derives encryption keys from the account code, and computes cycle estimates entirely on-device.
 
-Single Go binary, single SQLite file. No external services, no queues, no
-third parties. SQLite is adequate for this product's scale (one row per user
-per day at most) and keeps self-hosting trivial. The binary embeds migrations
-and applies them at boot.
+## Runtime Shape
+
+Single Go binary, single SQLite file. No external services, no queues, no third parties. SQLite via `modernc.org/sqlite` (pure Go, no CGO) is ideal for this product's operational model and makes self-hosting effortless. The binary embeds migrations and applies them automatically at boot.
 
 ```
-Android client (Room, offline-first)
+Android client (Room, offline-first, local E2EE keys)
         |  HTTPS, JSON, Bearer device token
         v
-  chi router -- middleware: recover, slog, auth, rate limit
+   chi router -- middleware: recover, slog, auth, rate limit
         |
-   api handlers -- parse --> domain (validate) --> sqlc queries
+   api handlers -- parse --> envelope validation --> sqlc queries
         |
    SQLite (modernc.org/sqlite, WAL, foreign_keys ON)
 ```
 
-## Authentication: anonymous, Mullvad-style
+## Authentication: Anonymous, Mullvad-Style
 
-No email, OAuth, phone, or password.
+No email, OAuth, phone number, or password.
 
-- **Account code:** 100 bits of `crypto/rand`, Crockford base32, displayed as
-  `LTL-XXXXX-XXXXX-XXXXX-XXXXX`. It is the account credential and is shown
-  **once** at registration; only its SHA-256 hash is stored. Losing it means
-  losing the account (recovery is a future, explicitly-designed feature).
-- **Device tokens:** each device registers against the account code and
-  receives a 256-bit bearer token (stored hashed). Tokens are revocable
-  individually. The account code itself is never sent again after a device is
-  registered, except to add more devices.
-- **Abuse control:** registration and code-based endpoints are rate limited
-  per client IP; token lookups are constant-work SHA-256 comparisons.
+- **Account code:** 100 bits of `crypto/rand` entropy, Crockford base32, displayed as `LTL-XXXXX-XXXXX-XXXXX-XXXXX`. It is shown **once** at registration; only its SHA-256 hash is stored.
+- **Device tokens:** each device registers against the account code and receives a 256-bit bearer token (stored hashed). Tokens are revocable individually.
+- **Abuse control:** registration and code-based endpoints are rate limited per client IP using an in-memory token bucket keyed by HMAC-hashed client IPs with an ephemeral per-process random pepper. Client IPs never touch permanent storage or logs.
 
-Security note: the account code is a bearer credential for a health-data
-service. This is an accepted Mullvad-style trade-off (memorable-ish, no PII),
-mitigated by high entropy, rate limiting, per-device revocation, and
-encryption at rest in deployment. It is not anonymous against a compromised
-server; see the encryption decision below.
+## Synchronization and End-to-End Encryption
 
-## Synchronization model
+Record content is sealed on the client and opaque to this server.
 
-Offline-first delta sync over a server-ordered change log:
+### Record Envelope
+Every synchronized record carries an unsealed envelope for routing and conflict detection:
+- `entity_type`: enum (`cycle`, `bleeding_observation`, `daily_entry`, `symptom_definition`, `symptom_log`, `biomarker_observation`, `medication_log`).
+- `entity_id`: client-generated UUIDv7.
+- `client_rev`: fresh UUID per local edit (tiebreak).
+- `updated_at`: RFC 3339 UTC instant (authority for Last-Write-Wins).
+- `deleted`: boolean tombstone flag.
+- `ciphertext`: sealed payload bytes (`0x01 || nonce(12) || AES-256-GCM || tag(16)`).
 
-- Every synchronized record carries an **envelope**: client-generated UUID
-  `id`, `client_rev` (new per local edit), client-declared `created_at` /
-  `updated_at` (RFC 3339), and `deleted_at` tombstone.
-- **Push:** client sends changed records; the server validates each against
-  `internal/domain`, applies it with a last-write-wins guard
-  (`updated_at`, then `client_rev`), and appends to `sync_changes` with a JSON
-  payload snapshot. Records that lose the LWW guard are returned to the client
-  as `conflicts` carrying the server's current state - nothing is silently
-  lost.
-- **Pull:** client sends its cursor (last seen `seq`); the server returns
-  ordered change rows (including tombstones) per account.
-- Server `seq` is transport ordering only. Domain truth is the validated
-  record content.
+### Conflict Resolution
+- Writes apply inside an atomic transaction: record upsert with last-write-wins guard (`updated_at`, then `client_rev`) plus append to `sync_changes`.
+- Losing records are returned to the client in `conflicts` carrying the server's current sealed state. The client decrypts both states and performs domain-level reconciliation.
 
-Known limitation (v1, documented in `api.md`): LWW is entity-level. Field
--level merging and vector-clock-style conflict detection are future work,
-tracked against the client's `SYNC_BOUNDARY.md` requirements.
+## Duo Companion
 
-## Estimates, not predictions
+Purpose-designed partner surface:
+- **Pairing:** Short-lived, single-use pairing code (50 bits, 7-day TTL) transported as text, deep link, or QR code rendered by the client from `pairing_url`.
+- **Granular Grants:** Tracker configures per-field grants (`cycle_day | period_estimate | mood | energy | support_requests`).
+- **Sealed Projections:** The tracker's device generates the shared view, applies active grants locally, seals the projection under the Duo link key, and publishes it via `PUT /v1/duo/payload`. The server relays the ciphertext to the partner.
+- **Support Requests:** Either partner may send a support message sealed under the Duo link key; the recipient acknowledges it.
 
-`internal/cyclecalc` computes ranges from the account's own recorded cycle
-starts: next-menstruation window, ovulation window anchored backward by a
-luteal constant (S07), fertile window. Outputs always carry `method`,
-`confidence` (`insufficient | low | moderate`), the cycle count and
-variability they were based on, and French disclaimer copy. Estimates are
-computed on demand from facts; they are never stored as facts. See
-`research/03-phases-and-ovulation.md`.
+## Estimates and Medical Posture
 
-## Duo
+All cycle calculations and estimates are computed strictly on-device on the client. The backend never performs screening, inference, or clinical assertions.
 
-Purpose-designed partner surface, not a clone. Pairing via a short-lived,
-single-use code (50 bits, 7-day expiry) transported as a typed value, a
-shareable link, or a QR code rendered by the client from `pairing_url`;
-per-field grants (`cycle_day | period_estimate | mood | energy |
-support_requests`); the partner endpoint returns a projection built strictly
-from active grants, and the tracker sees the support thread. Revocation is
-immediately observable by the partner. Implemented in v1 and covered by the
-smoke test.
+## Storage Lifecycle and Compaction
 
-## Encryption decision (v1: structured storage; E2EE is a future protocol project)
+- **Deletions:** Replicated via tombstones (`deleted = 1, ciphertext = NULL`) through `sync_changes`.
+- **Account Deletion:** Cascades across all associated tables with `ON DELETE CASCADE` (GDPR Article 17).
+- **Log Compaction:** `sync_changes` is an append-only change log. In high-frequency multi-device setups, historical changes can be pruned up to a safe client cursor horizon, keeping SQLite storage compact for homelab deployments.
 
-The client's `SYNC_BOUNDARY.md` forbids claiming E2EE before threat model,
-key lifecycle, and rollback protection are designed. Two viable paths were
-weighed:
+## Observability and Ops
 
-1. **Structured storage (chosen for v1):** server validates and stores
-   domain records; TLS in transit; encryption at rest is a deployment
-   requirement (S30). Enables server-side validation, conflict resolution on
-   content, and server-computed estimates - i.e. the "backend is the source
-   of truth for data" principle in full.
-2. **E2EE envelope storage:** server stores encrypted blobs per record;
-   validation and estimates move client-side; "source of truth" reduces to
-   ordering and access control; account recovery becomes a key-recovery
-   ceremony; multi-device and Duo need key-distribution protocols.
-
-Decision: **path 1 for v1.** Rationale: the source-of-truth principle
-requires a server that can read and validate; true E2EE is a protocol
-engineering project (threat model, key generation/storage, device
-authorization, rotation, recovery, rollback protection, independent review -
-the full `SYNC_BOUNDARY.md` checklist) where a bug is silent and
-catastrophic; and anonymous accounts plus minimization already remove the
-identity-linkage risk. If the threat model later requires "unreadable even
-to the operator", E2EE becomes a deliberate, reviewed v2 protocol project.
-The change is concentrated in the sync payload: `sync_changes.payload` and
-entity columns become ciphertext, and domain validation shrinks to envelope
-checks. Until then, no part of the product may claim end-to-end encryption.
-
-## Observability and ops
-
-- Structured JSON logs via `slog`; request IDs; no PII in logs (no codes,
-  tokens, or record contents).
-- `/healthz` (liveness), `/readyz` (DB ping), `/version`.
-- Configuration via environment only; sane defaults for local development.
+- Structured JSON logs via `slog` with request IDs; zero PII (no tokens, hashes, or bodies).
+- Health probes: `/healthz` (liveness), `/readyz` (database connectivity), `/version`.
+- Environment-only configuration with safe local defaults.

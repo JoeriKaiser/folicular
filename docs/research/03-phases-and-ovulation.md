@@ -20,18 +20,17 @@ Sources: S07 (Mihm 2011), S08 (Fehring 2006), S04 (Bull 2019).
   quality (background: sympto-thermal method literature; see S08 for phase
   variability context).
 
-## Schema impact
+## Schema and Domain Impact
 
 - `CyclePhase` values (`menstrual | follicular | ovulatory | luteal`) are
-  descriptive labels only; the API never infers ovulation as a fact from
-  calendar dates.
-- `cyclecalc` anchors the ovulation estimate at `next_menstruation_central -
-  luteal_days` (luteal constant 13, window widened by cycle variability),
-  never at a fixed cycle day (S07, S08).
+  descriptive labels only; neither the client nor API ever infers ovulation as
+  a fact from calendar dates.
+- Cycle estimates and fertile window calculations are computed exclusively on
+  the client (Luteal) using decrypted records, anchoring ovulation estimates
+  backward from next menstruation (`next_menstruation_central - luteal_days`,
+  luteal constant 13, widened by cycle variability per S07, S08).
 - All ovulation and fertile-window outputs are **windows with uncertainty
   labels**, never point predictions (S08).
-- `biomarker_observations` stores BBT (with time and `disturbed` quality
+- `BiomarkerObservationData` stores BBT (with time and `disturbed` quality
   flag), cervical fluid category, and cervix position/firmness as optional
-  daily self-observations. They are stored and returned as recorded; the v1
-  estimate engine does not consume them, and future use must remain
-  probabilistic and clearly labeled.
+  daily self-observations sealed under E2EE.

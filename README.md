@@ -119,7 +119,6 @@ internal/contract/     tests guarding the OpenAPI spec
 internal/db/           connection, pragmas, embedded migrations, sqlc queries + generated code (dbgen/)
 internal/auth/         account codes, device tokens, auth middleware
 internal/domain/       canonical domain types and validation
-internal/cyclecalc/    estimate engine (ranges, uncertainty, no claims)
 internal/api/          HTTP handlers (RFC 9457 errors)
 internal/server/       chi router wiring and middleware
 scripts/               smoke test

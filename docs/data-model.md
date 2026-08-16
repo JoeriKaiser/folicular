@@ -1,169 +1,142 @@
 # Data Model
 
-The schema is the canonical contract. It is defined by
-`internal/db/migrations/*.up.sql` and documented here with its research
-rationale (source IDs refer to `research/SOURCES.md`).
+The schema is defined by `internal/db/migrations/*.up.sql` and documented here with its research rationale (source IDs refer to `research/SOURCES.md`).
 
-Storage notes: SQLite via modernc.org/sqlite. Dates are ISO-8601 `TEXT`
-(`2026-07-21`); instants are RFC 3339 UTC `TEXT`. Booleans are `INTEGER`
-0/1. JSON arrays are `TEXT`. All tables use `TEXT` UUIDv7 primary keys;
-synchronized records are client-ID'd so offline devices never coordinate ID
-generation.
+Storage notes: SQLite via `modernc.org/sqlite` (pure Go). Dates are ISO-8601 `TEXT` (`2026-07-21`); instants are RFC 3339 UTC `TEXT`. Booleans are `INTEGER` 0/1. Foreign keys and WAL journal mode are enforced by default.
 
-## Identity
+---
+
+## Identity & Settings
 
 ### accounts
 
-| Column    | Notes                                                        |
-|-----------|--------------------------------------------------------------|
-| id        | server-generated UUIDv7                                      |
-| code_hash | SHA-256 of the normalized account code; UNIQUE. The code itself is never stored (Mullvad-style anonymous auth) |
-| status    | `active | disabled | deleted`                                |
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `TEXT PK` | Server-generated UUIDv7 |
+| `code_hash` | `BLOB UNIQUE` | SHA-256 hash of the normalized 100-bit account code. The plaintext code is shown once and never stored |
+| `status` | `TEXT` | `active | disabled | deleted` |
+| `created_at` | `TEXT` | RFC 3339 UTC |
+| `updated_at` | `TEXT` | RFC 3339 UTC |
 
 ### devices
 
-One row per registered device. `token_hash` is SHA-256 of the 256-bit bearer
-token. `revoked_at` disables the token without deleting audit context.
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `TEXT PK` | UUIDv7 |
+| `account_id` | `TEXT NOT NULL` | REFERENCES `accounts(id)` ON DELETE CASCADE |
+| `name` | `TEXT NOT NULL` | Client-provided device label (e.g. "Pixel 9") |
+| `token_hash` | `BLOB UNIQUE` | SHA-256 hash of the 256-bit bearer token |
+| `created_at` | `TEXT` | RFC 3339 UTC |
+| `last_seen_at`| `TEXT` | Best-effort timestamp updated on authenticated requests |
+| `revoked_at` | `TEXT` | Setting this disables the device token |
 
 ### account_settings
 
-Server-authoritative (not in the sync log; refreshed by clients on pull).
+Settings contain Article 9 health data (life stage STRAW+10 enum [S11], tracking focuses [S20-S25]) and are sealed client-side:
 
-- `locale` default `fr`, `time_zone` default `Europe/Paris`.
-- `life_stage`: STRAW+10-aligned enum (S11). User-selected, never inferred.
-- `tracking_focus`: JSON array of `pms | pmdd | endometriosis | pcos |
-  custom` - user-selected charting focuses, never diagnoses (S20-S25).
+| Column | Type | Notes |
+|---|---|---|
+| `account_id` | `TEXT PK` | REFERENCES `accounts(id)` ON DELETE CASCADE |
+| `settings_ciphertext` | `BLOB` | AES-256-GCM sealed settings JSON |
+| `updated_at` | `TEXT` | RFC 3339 UTC |
 
-## Synchronized records
+---
 
-Every synchronized table shares the envelope:
+## Synchronized Sealed Records
 
-```
-id          TEXT PK          client-generated UUIDv7
-account_id  TEXT NOT NULL    owner; CASCADE delete
-client_rev  TEXT NOT NULL    new UUID per local edit (conflict tiebreak)
-created_at  TEXT NOT NULL    client-declared RFC 3339
-updated_at  TEXT NOT NULL    client-declared RFC 3339 (LWW authority)
-deleted_at  TEXT             tombstone; NULL = live
-```
+Under end-to-end encryption, the server stores sealed record blobs alongside plaintext routing metadata.
 
-Writes apply inside a transaction: entity upsert (LWW-guarded) + append to
-`sync_changes` (JSON payload snapshot, per-account monotonic `seq`). Pulls
-read the change log; structured tables serve validation, read models, and
-estimates. This is why the server can be the source of truth while clients
-sync offline-first.
+### records
 
-### cycles
+Current state of each synchronized entity per account:
 
-The backbone. `start_date` is **cycle day 1 = first day of full menstrual
-flow**; preceding spotting does not start a cycle (S01).
+| Column | Type | Notes |
+|---|---|---|
+| `account_id` | `TEXT NOT NULL` | REFERENCES `accounts(id)` ON DELETE CASCADE |
+| `entity_id` | `TEXT NOT NULL` | Client-generated UUIDv7 |
+| `entity_type` | `TEXT NOT NULL` | `cycle | bleeding_observation | daily_entry | symptom_definition | symptom_log | biomarker_observation | medication_log` |
+| `client_rev` | `TEXT NOT NULL` | Fresh UUID per edit (LWW tiebreak) |
+| `ciphertext` | `BLOB` | `0x01 \|\| nonce(12) \|\| AES-256-GCM \|\| tag(16)` (NULL for tombstones) |
+| `deleted` | `INTEGER NOT NULL` | 0 for active records, 1 for tombstones |
+| `updated_at` | `TEXT NOT NULL` | RFC 3339 UTC instant (Last-Write-Wins authority) |
+| `recorded_at` | `TEXT NOT NULL` | Server-recorded timestamp |
 
-- `end_date` nullable: the current cycle is open. Irregular, long, or skipped
-  cycles are valid data, not errors (S05, S11).
-- `length_days` bounds 10-200: permissive plausibility, not a normative
-  24-38 filter; normative ranges belong to interpretation, not storage
-  (S03, S06).
-- `certainty` (`recorded | uncertain | estimated`) and `source`
-  (`manual | import | estimated`) keep facts and their provenance explicit.
-- Unique live `(account_id, start_date)`: two cycles cannot start the same
-  day; tombstones are excluded from the constraint.
-
-### bleeding_observations (one per day)
-
-- `flow`: `none | spotting | light | medium | heavy` - self-rated; FIGO
-  aligns "spotting" with intermenstrual bleeding, captured explicitly by the
-  `intermenstrual` flag (S01, S02).
-- `product_count` optional, bounded: supports personal patterns, not volume
-  diagnosis (S23).
-- No cause field, no PALM-COEIN taxonomy: bleeding is a neutral observation
-  (S02). Unique live `(account_id, observed_date)`.
-
-### daily_entries (one per day)
-
-Prospective daily charting: `pain_level`, `mood_level`, `energy_level`
-(1-5, nullable = not recorded), free-text `notes`. This date-keyed,
-severity-scaled structure is what prospective charting requires (S25) and
-what condition-aware tracking uses without encoding condition logic.
-Unique live `(account_id, entry_date)`.
-
-### symptom_definitions
-
-Per-account symptom catalog: stable `key`, French-default `label`,
-`category` (`mood | physical | energy | pain | cervical_fluid | other`),
-`builtin` flag, `active` flag. Accounts are seeded with a built-in set
-mirroring the Android client's defaults; users may add custom symptoms
-(S20-S22 enable personalized tracking without server-side assertions).
-Clients must adopt the server-seeded built-ins (matched by `key`) rather
-than creating their own rows for them, so all devices converge on one
-catalog; the unique live `(account_id, key)` index enforces this.
-
-### symptom_logs
-
-Point observations: `log_date`, `logged_at`, `symptom_key` (loose reference
-to a definition key so logs survive definition edits), `severity` 1-5.
-
-### biomarker_observations (one per day, optional)
-
-Self-observed fertility-aware biomarkers, stored as recorded:
-
-- `bbt_celsius` (34-43 plausibility), `bbt_time`, `bbt_quality`
-  (`normal | disturbed` - sleep disruption etc. invalidates interpretation).
-- `cervical_fluid`: `none | sticky | creamy | watery | egg_white | unresolved`.
-- `cervix_position` (`low | medium | high | unknown`), `cervix_firmness`
-  (`firm | soft | unknown`).
-
-These are retrospective/probabilistic signals (S07, S08). v1 stores and
-serves them; the estimate engine does not consume them. Any future use must
-remain probabilistic and labeled. Unique live `(account_id, observed_date)`.
-
-### medication_logs
-
-`log_date`, optional `taken_at`, `name`, `dose`, `kind`
-(`contraceptive_hormonal | emergency_contraception | pain_relief |
-supplement | other`). Hormonal contraception is tracked because it changes
-bleeding patterns and cycle interpretability - recorded as context, never
-used to infer anything about the user.
+PRIMARY KEY: `(account_id, entity_id)`
 
 ### sync_changes
 
-Per-account ordered change log: `seq` (AUTOINCREMENT), `entity_type`
-(CHECK-constrained enum), `entity_id`, `deleted`, `payload` (JSON snapshot;
-NULL when deleted), client `updated_at`, `recorded_at`. Pulls are
-`seq`-range scans; retention/compaction is future work.
+Append-only change log for delta synchronization:
 
-## Duo
+| Column | Type | Notes |
+|---|---|---|
+| `seq` | `INTEGER PK AUTOINCREMENT` | Monotonic ordering key per account |
+| `account_id` | `TEXT NOT NULL` | REFERENCES `accounts(id)` ON DELETE CASCADE |
+| `entity_type` | `TEXT NOT NULL` | Entity type enum |
+| `entity_id` | `TEXT NOT NULL` | Entity UUID |
+| `client_rev` | `TEXT NOT NULL` | Revision identifier |
+| `deleted` | `INTEGER NOT NULL` | 0 or 1 |
+| `ciphertext` | `BLOB` | Sealed record bytes (NULL for tombstones) |
+| `updated_at` | `TEXT NOT NULL` | Client timestamp |
+| `recorded_at` | `TEXT NOT NULL` | Server timestamp |
+
+---
+
+## Client Record Schemas (Sealed Payloads)
+
+The plaintext format inside `ciphertext` is shared across client versions and specified in `openapi/openapi.yaml`:
+
+- **`CycleData`:** Cycle starts (`start_date` = first day of full menstrual flow [S01]), `bleeding_days`, plausibility bounds (10-200 days [S03, S06]), certainty and source flags.
+- **`BleedingObservationData`:** FIGO-aligned flow ratings (`none | spotting | light | medium | heavy`), intermenstrual bleeding flag [S01, S02].
+- **`DailyEntryData`:** Prospective daily tracking: date-keyed `pain_level`, `mood_level`, `energy_level` (1-5), notes [S25].
+- **`SymptomDefinitionData` & `SymptomLogData`:** Built-in and custom symptom catalog and timestamped point observations [S20-S22].
+- **`BiomarkerObservationData`:** BBT in Celsius (34-43C plausibility), cervical fluid characteristics, cervix position/firmness [S07, S08].
+- **`MedicationLogData`:** Contraceptives, pain relief, and supplements.
+
+---
+
+## Duo Companion
 
 ### duo_links
 
-`owner_account_id`, nullable `partner_account_id` (NULL while pending),
-`code_hash` (SHA-256 of the short pairing code; NULL after acceptance),
-`status` (`pending | active | revoked`).
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `TEXT PK` | UUIDv7 |
+| `owner_account_id` | `TEXT NOT NULL` | REFERENCES `accounts(id)` ON DELETE CASCADE |
+| `partner_account_id` | `TEXT` | REFERENCES `accounts(id)` ON DELETE CASCADE (NULL while pending) |
+| `code_hash` | `BLOB` | SHA-256 of the 50-bit pairing code (cleared on acceptance) |
+| `status` | `TEXT NOT NULL` | `pending | active | revoked` |
+| `created_at` | `TEXT` | RFC 3339 UTC |
+| `updated_at` | `TEXT` | RFC 3339 UTC |
+| `revoked_at` | `TEXT` | Timestamp when link was revoked |
 
 ### duo_grants
 
-One row per `(link_id, field)`; `granted_at` / `revoked_at` make revocation
-an explicit, observable event rather than a boolean flip. Fields:
-`cycle_day | period_estimate | mood | energy | support_requests`.
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `TEXT PK` | UUIDv7 |
+| `link_id` | `TEXT NOT NULL` | REFERENCES `duo_links(id)` ON DELETE CASCADE |
+| `field` | `TEXT NOT NULL` | `cycle_day | period_estimate | mood | energy | support_requests` |
+| `granted_at` | `TEXT NOT NULL` | RFC 3339 UTC |
+| `revoked_at` | `TEXT` | NULL when grant is active |
+
+### duo_payloads
+
+Stores the latest sealed partner projection published by the tracker:
+
+| Column | Type | Notes |
+|---|---|---|
+| `link_id` | `TEXT PK` | REFERENCES `duo_links(id)` ON DELETE CASCADE |
+| `ciphertext` | `BLOB NOT NULL` | Sealed under the Duo link key by the tracker's device |
+| `updated_at` | `TEXT NOT NULL` | RFC 3339 UTC |
 
 ### support_requests
 
-`author_role` (`tracker | partner`), `kind` (`general | comfort | practical |
-space`), optional `message`, `acknowledged_at`. Visible to link members only.
-
-## Estimates: deliberately not stored (v1)
-
-Predictions are computed on demand from live cycles (`cyclecalc`) and served
-with method, basis, windows, and confidence. Storing them would risk stale
-estimates masquerading as facts and would blur the observations/estimates
-boundary. If persistence becomes necessary (audit, history), it gets a
-dedicated `estimates` table with `generated_at`, `method`, `superseded_at`,
-and is never joined into observation reads.
-
-## Deletion semantics
-
-- Record delete = tombstone (`deleted_at` set, replicated via the change
-  log) so other devices converge.
-- Account deletion cascades everything; a future compaction job can hard
-  delete tombstones older than a retention window.
-- Duo revocation stops data flow immediately; it never deletes the tracker's
-  history and never retroactively exposes anything.
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `TEXT PK` | UUIDv7 |
+| `link_id` | `TEXT NOT NULL` | REFERENCES `duo_links(id)` ON DELETE CASCADE |
+| `author_role` | `TEXT NOT NULL` | `tracker | partner` |
+| `kind` | `TEXT NOT NULL` | `general | comfort | practical | space` |
+| `message_ciphertext` | `BLOB` | Sealed under the Duo link key |
+| `created_at` | `TEXT NOT NULL` | RFC 3339 UTC |
+| `acknowledged_at` | `TEXT` | RFC 3339 UTC |

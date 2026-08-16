@@ -96,38 +96,3 @@ func IsEntityType(s string) bool {
 	}
 	return false
 }
-
-func isDate(s string) bool {
-	_, err := time.Parse(time.DateOnly, s)
-	return err == nil
-}
-
-func isHHMM(s string) bool {
-	_, err := time.Parse("15:04", s)
-	return err == nil
-}
-
-func oneOf(v string, allowed ...string) bool {
-	for _, a := range allowed {
-		if v == a {
-			return true
-		}
-	}
-	return false
-}
-
-func joinErrs(prefix string, errs []string) error {
-	if len(errs) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%s: %s", prefix, strings.Join(errs, "; "))
-}
-
-const maxNotesLen = 5000
-
-func checkNotes(notes string, errs []string) []string {
-	if len(notes) > maxNotesLen {
-		errs = append(errs, "notes: dépasse la longueur maximale")
-	}
-	return errs
-}

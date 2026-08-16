@@ -25,42 +25,4 @@ func sp(v sql.NullString) *string {
 	return &v.String
 }
 
-func ni(p *int) sql.NullInt64 {
-	if p == nil {
-		return sql.NullInt64{}
-	}
-	return sql.NullInt64{Int64: int64(*p), Valid: true}
-}
-
-func ip(v sql.NullInt64) *int {
-	if !v.Valid {
-		return nil
-	}
-	i := int(v.Int64)
-	return &i
-}
-
-func nf(p *float64) sql.NullFloat64 {
-	if p == nil {
-		return sql.NullFloat64{}
-	}
-	return sql.NullFloat64{Float64: *p, Valid: true}
-}
-
-func fp(v sql.NullFloat64) *float64 {
-	if !v.Valid {
-		return nil
-	}
-	return &v.Float64
-}
-
-func boolInt(b bool) int64 {
-	if b {
-		return 1
-	}
-	return 0
-}
-
-// Cycles ----------------------------------------------------------------
-
 func stringPtr(s string) *string { return &s }
