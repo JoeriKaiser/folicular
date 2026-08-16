@@ -15,8 +15,8 @@
 #   - no `container_name`: Coolify manages naming, and a fixed name collides on
 #     redeploy.
 #   - resource limits, so one runaway process cannot take the VPS down.
-#   - every security-relevant variable is listed explicitly, including the two
-#     that are dangerous to forget (see below).
+#   - every security-relevant variable is listed explicitly, including
+#     FOLICULAR_TRUSTED_PROXIES which is fail-fast (see below).
 #
 # SQLite is single-writer: run exactly ONE replica. Never scale this service.
 
@@ -39,10 +39,9 @@ services:
       # app treats as its App Link target, or shared links will not open.
       FOLICULAR_PAIRING_BASE_URL: ${FOLICULAR_PAIRING_BASE_URL:?set the Duo pairing base URL}
 
-      # REQUIRED IN PRODUCTION. Empty leaves account registration OPEN to
-      # anyone who finds the domain. The server logs a warning at boot when
-      # unset; this makes it a hard failure instead.
-      FOLICULAR_INVITE_CODES: ${FOLICULAR_INVITE_CODES:?set at least one invite code}
+      # The official deployment deliberately leaves registration open because
+      # the official Android client sends no invite code. Self-hosters who want
+      # a closed rollout use docker-compose.selfhost.yml or docker-compose.caddy.yml.
 
       # REQUIRED BEHIND A PROXY. Without it every request appears to originate
       # from the proxy, so per-IP rate limiting buckets all users together and

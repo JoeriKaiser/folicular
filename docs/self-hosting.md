@@ -275,7 +275,7 @@ folicular is configured entirely through environment variables:
 | `FOLICULAR_ADDR` | `:8080` | TCP network address to bind (e.g. `:8080` or `127.0.0.1:8080`). |
 | `FOLICULAR_DB_PATH` | `./folicular.db` | Filesystem path for the SQLite database file and WAL logs. |
 | `FOLICULAR_LOG_LEVEL` | `info` | Logging verbosity: `debug`, `info`, `warn`, `error`. Logs are structured JSON. |
-| `FOLICULAR_INVITE_CODES` | *(empty)* | Comma-separated list of invite codes required for account registration. |
+| `FOLICULAR_INVITE_CODES` | *(empty)* | Comma-separated list of invite codes required for account registration. **Warning:** current Luteal builds cannot send an invite code; setting this will cause app registrations to fail with 401. Leave empty (registration open) until a client version supports the field. |
 | `FOLICULAR_PAIRING_BASE_URL` | *(empty)* | Public base URL used to construct Duo partner invite links and QR codes. |
 | `FOLICULAR_TRUSTED_PROXIES` | `127.0.0.1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` | Comma-separated IP addresses or CIDR blocks of reverse proxies trusted for `X-Forwarded-For`. |
 
@@ -285,6 +285,8 @@ To prevent unauthorized users from registering accounts on your server:
 2. Only SHA-256 hashes of the codes are held in memory.
 3. During registration (`POST /v1/auth/register`), clients must supply a matching invite code.
 4. When left empty, registration is open to anyone with network access to the server.
+
+> **Note on Android client:** Current Luteal builds cannot send an invite code. If you set `FOLICULAR_INVITE_CODES`, registrations from the mobile app will fail with HTTP 401. Leave this variable empty to keep registration open until a client release introduces the field.
 
 ---
 
@@ -351,10 +353,9 @@ Once your server is running and accessible over HTTPS, connect the Android appli
 3. **Configure Server URL**:
    - Set **URL du serveur** (*Server URL*) to your domain:
      `https://folicular.example.com` (or your Tailscale HTTPS URL).
-4. **Enter Invite Code (if configured)**:
-   - If your server has `FOLICULAR_INVITE_CODES` enabled, enter your invite code into the **Code d'invitation** field.
-5. **Connect / Register**:
+4. **Connect / Register**:
    - Tap to create your account. Luteal will generate your random anonymous account code and device keys, then perform the initial sync.
+   - *Note on invite codes:* Current Luteal builds cannot send an invite code; if you set `FOLICULAR_INVITE_CODES` on your server, app registrations will fail with 401. Leave it empty (registration open) until a client version supports the field.
 
 ### Verifying Server Connectivity
 

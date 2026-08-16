@@ -80,8 +80,8 @@ If you prefer Coolify's **Docker Compose** build pack instead, point it at
 `docker-compose.prod.yml`. That file uses `expose` rather than `ports` (so the
 service stays on the internal network behind the proxy instead of being
 published on a host port), omits `container_name` so redeploys do not collide,
-and fails fast when `FOLICULAR_INVITE_CODES` or `FOLICULAR_TRUSTED_PROXIES` are
-unset. The root `docker-compose.yml` is for local development only and must not
+and fails fast when `FOLICULAR_TRUSTED_PROXIES` is unset. The root
+`docker-compose.yml` is for local development only and must not
 be used on the VPS.
 
 The multi-stage `Dockerfile` produces a static, CGO-free binary, runs as a
@@ -115,7 +115,7 @@ Set these in the application's Environment Variables panel:
 | `FOLICULAR_LOG_LEVEL` | `info` | Structured JSON logs; no PII by design. |
 | `FOLICULAR_PAIRING_BASE_URL` | `https://luteal-duo.waldemar.site` | Public base for Duo pairing links/QR codes (`{base}/accept?code=…`). Must match the domain the app treats as its App Link target. |
 | `FOLICULAR_TRUSTED_PROXIES` | e.g. `172.16.0.0/12` | Comma-separated IPs/CIDRs the reverse proxy connects from. Required for correct per-IP rate limiting behind Coolify (see below). Empty trusts no proxy. |
-| `FOLICULAR_INVITE_CODES` | e.g. `LTL-BETA-0001,LTL-BETA-0002` | Comma-separated invite codes. When set, account registration requires a matching code (closed rollout); only SHA-256 hashes are held in memory. Empty leaves registration open (and logs a warning). |
+| `FOLICULAR_INVITE_CODES` | *(leave unset)* | Leave unset: the official service runs with open registration; the current Android client cannot send a code. When set, account registration requires a matching code (for closed rollouts via selfhost compose files); only SHA-256 hashes are held in memory. |
 
 ### Health checks and zero-downtime deploy
 
@@ -143,20 +143,21 @@ and treat the in-process limiter as a backstop.
 
 ### Registration gate (invite codes)
 
-For the closed rollout, account registration is gated by invite codes. Set
-`FOLICULAR_INVITE_CODES` to a comma-separated list of codes (e.g.
+The official production deployment runs with registration **open** because the
+official Android client does not send an invite code.
+
+For closed rollouts or self-hosters using `docker-compose.selfhost.yml` or
+`docker-compose.caddy.yml`, account registration can be gated by invite codes.
+Set `FOLICULAR_INVITE_CODES` to a comma-separated list of codes (e.g.
 `LTL-BETA-0001,LTL-BETA-0002`); each is held only as a SHA-256 hash. When the
 list is non-empty, `POST /v1/auth/register` requires a matching `invite_code`
 and otherwise returns a generic `401` (no enumeration). When the list is empty,
-registration is open and the server logs a warning at startup — so production
-must set at least one code.
+registration is open and the server logs a warning at startup.
 
-Distribute codes out of band (one per tester). The client collects the code in
-Settings → Synchronisation and sends it on first registration. Codes are
-**reusable** in this implementation; rotate or revoke them by editing the env
-and restarting. If you later need single-use, revocable, auditable codes, move
-them to a database table with a minting CLI (a contained backend change).
-
+Codes are **reusable** in this implementation; rotate or revoke them by editing
+the env and restarting. If you later need single-use, revocable, auditable
+codes, move them to a database table with a minting CLI (a contained backend
+change).
 ## Backups
 
 SQLite + WAL makes online backups trivial, but note the runtime image is
@@ -213,24 +214,29 @@ Two consequences specific to F-Droid:
   static API key would be published in the repository. Do not add one.
 
 **The genuinely open surface is `/v1/auth/register`** (plus the harmless
-`/healthz`, `/readyz`, `/version`). Registration is **gated by invite code**
-for the closed rollout (see [Registration gate](#registration-gate-invite-codes)):
-strangers cannot create accounts without a code you distribute. Per-IP rate
-limiting on the credential endpoints (via `FOLICULAR_TRUSTED_PROXIES`, above)
-is the abuse backstop.
+`/healthz`, `/readyz`, `/version`). On the official deployment, registration is
+**open by design**: anonymous account creation requires no invite code or email
+(supporting GDPR pseudonymisation), and because all record payloads are E2EE,
+the server holds no diagnosis or health data. Per-IP rate limiting on the
+credential endpoints (via `FOLICULAR_TRUSTED_PROXIES`, above) is the abuse
+backstop. (See [Registration gate](#registration-gate-invite-codes) for optional
+invite gating in self-hosted deployments.)
 
 Chosen posture and remaining levers, in priority order:
 
-1. **Invite-code registration gate (primary access control, active).**
-   `FOLICULAR_INVITE_CODES` restricts account creation to people you give a
-   code to. Codes are matched by SHA-256 hash and live server-side only — never
-   in plaintext, never in the app.
+1. **Open anonymous registration with E2EE (active).** The official service
+   runs with open registration. Account creation is anonymous by design (GDPR
+   pseudonymisation), and all health and symptom data are end-to-end encrypted
+   client-side, so the server stores only ciphertext and routing metadata.
+   Per-IP rate limiting acts as the abuse backstop. Self-hosters who want a
+   closed rollout can optionally configure `FOLICULAR_INVITE_CODES`.
 2. **Edge rate limiting (abuse backstop).** Per-IP rate limiting on the
    credential endpoints, reinforced at the edge (Coolify proxy rules or a
    CDN/WAF) for launch.
-3. **Single-use invite codes (later hardening).** The env codes are reusable
-   (a tester could share theirs). If you need single-use, revocable, auditable
-   codes, move them to a database table with a minting CLI.
+3. **Single-use invite codes (later hardening).** The optional env codes for
+   self-hosters are reusable (a tester could share theirs). If you need
+   single-use, revocable, auditable codes, move them to a database table with a
+   minting CLI.
 4. **Certificate pinning (later, with care).** Valuable for health data in
    transit, but with auto-renewed Let's Encrypt certs you must pin a *stable*
    key (the Let's Encrypt root/intermediate SPKI, or a private key you reuse
