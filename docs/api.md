@@ -26,7 +26,21 @@ Conventions:
 
 Create an anonymous account and register the first device.
 
-Request (`invite_code` is required only when registration is gated; omit it when registration is open):
+Clients can register in zero-knowledge mode by supplying `auth_hash`, a hex or base64 SHA-256 hash of the client-derived authentication key $K_{\text{auth}}$. In this mode, the server never observes the account code, master secret, or record encryption key.
+
+Alternatively, omitting `auth_hash` preserves legacy behavior: the server generates a 100-bit Crockford base32 account code, stores its SHA-256 hash, and returns the display code in `account.code`.
+
+Zero-knowledge request:
+
+```json
+{
+  "device_name": "Pixel 9",
+  "auth_hash": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+  "invite_code": "LTL-BETA-0001"
+}
+```
+
+Legacy request (`invite_code` is required only when registration is gated; omit it when registration is open):
 
 ```json
 {
@@ -37,7 +51,23 @@ Request (`invite_code` is required only when registration is gated; omit it when
 
 When registration is gated and `invite_code` is missing or invalid, the server returns a generic `401` problem.
 
-Response `201`:
+Response `201` (Zero-Knowledge):
+
+```json
+{
+  "account": {
+    "id": "019832e0-6c14-7000-8000-000000000001"
+  },
+  "device": {
+    "id": "019832e0-6c15-7000-8000-000000000002",
+    "name": "Pixel 9",
+    "token": "ltok_Ab3-..."
+  },
+  "warning": "Conservez vos clés de récupération en lieu sûr : elles permettent seules de retrouver votre compte et d'ajouter des périphériques."
+}
+```
+
+Response `201` (Legacy):
 
 ```json
 {
@@ -54,13 +84,22 @@ Response `201`:
 }
 ```
 
-The account `code` is shown **once**. Only its SHA-256 hash is stored. No email recovery exists.
+In legacy mode, the account `code` is shown **once**. Only its SHA-256 hash is stored. No email recovery exists.
 
 ### POST /v1/auth/devices
 
-Register an additional device using the account code. Rate limited per IP.
+Register an additional device using either a zero-knowledge `auth_hash` or a legacy account code. Rate limited per IP.
 
-Request:
+Zero-knowledge request:
+
+```json
+{
+  "auth_hash": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+  "device_name": "Tablette"
+}
+```
+
+Legacy request:
 
 ```json
 {
@@ -82,7 +121,7 @@ Response `201`:
 }
 ```
 
-Errors: `401` invalid code (generic detail, no enumeration), `429` rate limited.
+Errors: `401` invalid code or auth hash (generic detail, no enumeration), `429` rate limited.
 
 ### GET /v1/auth/devices
 
