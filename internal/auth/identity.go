@@ -9,6 +9,7 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math/big"
 	"strings"
@@ -52,6 +53,46 @@ func HashCode(normalized string) []byte {
 // time.
 func CodeMatches(normalized string, stored []byte) bool {
 	return subtle.ConstantTimeCompare(HashCode(normalized), stored) == 1
+}
+
+// ErrInvalidAuthHash indicates an auth_hash cannot be parsed as a 32-byte hash.
+var ErrInvalidAuthHash = errors.New("auth_hash must be a 32-byte hash in hex or base64")
+
+// ParseAuthHash decodes a client-provided authentication hash.
+// It accepts 32-byte SHA-256 hashes in hex (64 chars) or base64 (standard or URL-safe, with or without padding).
+func ParseAuthHash(input string) ([]byte, error) {
+	s := strings.TrimSpace(input)
+	if s == "" {
+		return nil, ErrInvalidAuthHash
+	}
+
+	if len(s) == 64 {
+		if b, err := hex.DecodeString(s); err == nil && len(b) == 32 {
+			return b, nil
+		}
+	}
+
+	encodings := []*base64.Encoding{
+		base64.StdEncoding,
+		base64.RawStdEncoding,
+		base64.URLEncoding,
+		base64.RawURLEncoding,
+	}
+	for _, enc := range encodings {
+		if b, err := enc.DecodeString(s); err == nil && len(b) == 32 {
+			return b, nil
+		}
+	}
+
+	return nil, ErrInvalidAuthHash
+}
+
+// AuthHashMatches compares a client-provided auth hash against a stored hash in constant time.
+func AuthHashMatches(clientHash, stored []byte) bool {
+	if len(clientHash) != len(stored) || len(stored) != 32 {
+		return false
+	}
+	return subtle.ConstantTimeCompare(clientHash, stored) == 1
 }
 
 // pairingCodeSymbols is 50 bits (10 x 5-bit symbols), displayed as

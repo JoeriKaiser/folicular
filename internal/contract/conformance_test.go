@@ -10,7 +10,9 @@ package contract
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -250,6 +252,43 @@ func TestConformance_InviteGate(t *testing.T) {
 	reg := h.do("POST", "/v1/auth/register", map[string]any{"device_name": "x", "invite_code": "BETA-1234"}, 201)
 	if reg["device"] == nil {
 		t.Fatalf("expected device in register response: %v", reg)
+	}
+}
+
+func TestConformance_ZeroKnowledgeAuthFlow(t *testing.T) {
+	h := newHarness(t)
+
+	kAuth := sha256.Sum256([]byte("conformance-zk-k-auth-entropy"))
+	authHashHex := hex.EncodeToString(kAuth[:])
+
+	// Register with auth_hash: 201, validates RegisterResponse schema without account.code
+	reg := h.do("POST", "/v1/auth/register", map[string]any{
+		"device_name": "zk-phone",
+		"auth_hash":   authHashHex,
+	}, 201)
+	acct, ok := reg["account"].(map[string]any)
+	if !ok || acct["id"] == nil || acct["id"] == "" {
+		t.Fatalf("expected account.id in response: %v", reg)
+	}
+	if acct["code"] != nil && acct["code"] != "" {
+		t.Fatalf("expected account.code to be omitted in ZK auth response: %v", acct["code"])
+	}
+	dev, ok := reg["device"].(map[string]any)
+	if !ok || dev["token"] == nil || dev["token"] == "" {
+		t.Fatalf("expected device.token in response: %v", reg)
+	}
+
+	// Add device with auth_hash: 201, validates addDevice response schema
+	add := h.do("POST", "/v1/auth/devices", map[string]any{
+		"device_name": "zk-laptop",
+		"auth_hash":   authHashHex,
+	}, 201)
+	if add["account_id"] != acct["id"] {
+		t.Fatalf("expected account_id %v, got %v", acct["id"], add["account_id"])
+	}
+	dev2, ok := add["device"].(map[string]any)
+	if !ok || dev2["token"] == nil || dev2["token"] == "" {
+		t.Fatalf("expected device.token in add response: %v", add)
 	}
 }
 

@@ -95,9 +95,11 @@ paths:
       security: []
       summary: Create an anonymous account and register the first device
       description: |
-        The account code is shown exactly once; only its SHA-256 hash is
-        stored. Losing it means losing the account - no email recovery
-        exists.
+        When auth_hash is provided, the client derives authentication and
+        encryption keys locally so the server never observes the master
+        entropy. Otherwise, a legacy account code is generated and shown
+        exactly once; only its SHA-256 hash is stored. Losing the credentials
+        means losing the account - no email recovery exists.
       requestBody:
         required: true
         content:
@@ -112,6 +114,19 @@ paths:
                     Invite code required when registration is gated (closed
                     rollout). Ignored when registration is open.
                   example: LTL-BETA-0001
+                auth_hash:
+                  type: string
+                  description: >
+                    Client-computed authentication hash (hex or base64 SHA-256
+                    of K_auth). When provided, the server never observes the
+                    account code or master key.
+                  example: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069
+                code:
+                  type: string
+                  description: >
+                    Optional client-generated legacy account code
+                    (LTL-XXXXX-XXXXX-XXXXX-XXXXX).
+                  example: LTL-8K3FQ-Z2WNT-7HJMC-4XRDB
       responses:
         "201":
           description: Account and first device created
@@ -123,17 +138,17 @@ paths:
                 properties:
                   account:
                     type: object
-                    required: [id, code]
+                    required: [id]
                     properties:
                       id: { $ref: "#/components/schemas/UUID" }
                       code:
                         type: string
-                        description: Account code, shown once (LTL-XXXXX-XXXXX-XXXXX-XXXXX)
+                        description: Account code, shown once (LTL-XXXXX-XXXXX-XXXXX-XXXXX). Omitted when auth_hash is provided.
                         example: LTL-8K3FQ-Z2WNT-7HJMC-4XRDB
                   device: { $ref: "#/components/schemas/NewDevice" }
                   warning:
                     type: string
-                    description: French user-facing notice about keeping the code safe
+                    description: French user-facing notice about keeping credentials safe
         default: { $ref: "#/components/responses/Problem" }
 
   /v1/auth/devices:
@@ -141,7 +156,7 @@ paths:
       tags: [auth]
       operationId: addDevice
       security: []
-      summary: Register an additional device using the account code
+      summary: Register an additional device using the account code or auth hash
       description: Rate limited per client IP. Failures are generic (no enumeration).
       requestBody:
         required: true
@@ -149,9 +164,17 @@ paths:
           application/json:
             schema:
               type: object
-              required: [code]
               properties:
-                code: { type: string, example: LTL-8K3FQ-Z2WNT-7HJMC-4XRDB }
+                code:
+                  type: string
+                  description: Legacy account code (LTL-XXXXX-XXXXX-XXXXX-XXXXX)
+                  example: LTL-8K3FQ-Z2WNT-7HJMC-4XRDB
+                auth_hash:
+                  type: string
+                  description: >
+                    Client-computed authentication hash (hex or base64 SHA-256
+                    of K_auth).
+                  example: 7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069
                 device_name: { type: string, maxLength: 120 }
       responses:
         "201":
@@ -879,9 +902,30 @@ components:
         bbt_celsius: { type: number, format: double, nullable: true, minimum: 34.0, maximum: 43.0 }
         bbt_time: { type: string, nullable: true, pattern: "^([01][0-9]|2[0-3]):[0-5][0-9]$" }
         bbt_quality: { $ref: "#/components/schemas/BbtQuality" }
+        bbt_disturbances:
+          type: array
+          items:
+            type: string
+            enum: [fever, alcohol, poor_sleep, time_shift, late_measurement, stress, medication]
         cervical_fluid:
           allOf: [{ $ref: "#/components/schemas/CervicalFluid" }]
           nullable: true
+        cervical_sensation:
+          type: string
+          nullable: true
+          enum: [dry, damp, wet, slippery]
+        cervical_texture:
+          type: string
+          nullable: true
+          enum: [sticky, creamy, egg_white, watery]
+        lh_test_result:
+          type: string
+          nullable: true
+          enum: [negative, low, peak_positive, indeterminate]
+        hcg_test_result:
+          type: string
+          nullable: true
+          enum: [negative, positive, faint_uncertain]
         cervix_position:
           allOf: [{ $ref: "#/components/schemas/CervixPosition" }]
           nullable: true

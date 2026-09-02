@@ -26,13 +26,14 @@ import (
 type registerRequest struct {
 	DeviceName string `json:"device_name"`
 	InviteCode string `json:"invite_code"`
+	AuthHash   string `json:"auth_hash"`
+	Code       string `json:"code"`
 }
 
 type accountCodeResponse struct {
 	ID   string `json:"id"`
-	Code string `json:"code"`
+	Code string `json:"code,omitempty"`
 }
-
 type deviceTokenResponse struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
@@ -65,11 +66,33 @@ func (d *Deps) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	accountID := uuid.NewString()
-	displayCode, codeHash, err := auth.GenerateAccountCode()
-	if err != nil {
-		d.Log.Error("account code generation failed", "err", err)
-		problem.Write(w, r, problem.Internal())
-		return
+	var (
+		codeHash    []byte
+		displayCode string
+	)
+	if strings.TrimSpace(req.AuthHash) != "" {
+		parsed, err := auth.ParseAuthHash(req.AuthHash)
+		if err != nil {
+			problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée", "auth_hash: format de hachage invalide (attendu 32 octets en hex ou base64)"))
+			return
+		}
+		codeHash = parsed
+	} else if strings.TrimSpace(req.Code) != "" {
+		norm := auth.NormalizeCode(req.Code)
+		if len(norm) != 20 {
+			problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée", "code: format de code de compte invalide"))
+			return
+		}
+		codeHash = auth.HashCode(norm)
+		displayCode = req.Code
+	} else {
+		var err error
+		displayCode, codeHash, err = auth.GenerateAccountCode()
+		if err != nil {
+			d.Log.Error("account code generation failed", "err", err)
+			problem.Write(w, r, problem.Internal())
+			return
+		}
 	}
 	deviceID := uuid.NewString()
 	token, tokenHash, err := auth.GenerateDeviceToken()
@@ -101,10 +124,14 @@ func (d *Deps) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	warning := "Le code de compte est affiché une seule fois. Conservez-le en lieu sûr : il permet seul de retrouver votre compte et d'ajouter des périphériques."
+	if displayCode == "" {
+		warning = "Conservez vos clés de récupération en lieu sûr : elles permettent seules de retrouver votre compte et d'ajouter des périphériques."
+	}
 	writeJSON(w, http.StatusCreated, registerResponse{
 		Account: accountCodeResponse{ID: accountID, Code: displayCode},
 		Device:  deviceTokenResponse{ID: deviceID, Name: req.DeviceName, Token: token},
-		Warning: "Le code de compte est affiché une seule fois. Conservez-le en lieu sûr : il permet seul de retrouver votre compte et d'ajouter des périphériques.",
+		Warning: warning,
 	})
 }
 
@@ -112,6 +139,7 @@ func (d *Deps) HandleRegister(w http.ResponseWriter, r *http.Request) {
 
 type addDeviceRequest struct {
 	Code       string `json:"code"`
+	AuthHash   string `json:"auth_hash"`
 	DeviceName string `json:"device_name"`
 }
 
@@ -132,13 +160,32 @@ func (d *Deps) HandleAddDevice(w http.ResponseWriter, r *http.Request) {
 	if !decodeJSON(w, r, &req) {
 		return
 	}
-	normalized := auth.NormalizeCode(req.Code)
-	account, err := d.Q.GetAccountByCodeHash(r.Context(), auth.HashCode(normalized))
-	if err != nil || account.Status != "active" {
+
+	var codeHash []byte
+	if strings.TrimSpace(req.AuthHash) != "" {
+		parsed, err := auth.ParseAuthHash(req.AuthHash)
+		if err != nil {
+			problem.Write(w, r, problem.Status(http.StatusUnauthorized, "Code invalide", "Le code de compte est invalide."))
+			return
+		}
+		codeHash = parsed
+	} else if strings.TrimSpace(req.Code) != "" {
+		normalized := auth.NormalizeCode(req.Code)
+		codeHash = auth.HashCode(normalized)
+	} else {
 		problem.Write(w, r, problem.Status(http.StatusUnauthorized, "Code invalide", "Le code de compte est invalide."))
 		return
 	}
 
+	account, err := d.Q.GetAccountByCodeHash(r.Context(), codeHash)
+	if err != nil || account.Status != "active" {
+		problem.Write(w, r, problem.Status(http.StatusUnauthorized, "Code invalide", "Le code de compte est invalide."))
+		return
+	}
+	if !auth.AuthHashMatches(codeHash, account.CodeHash) {
+		problem.Write(w, r, problem.Status(http.StatusUnauthorized, "Code invalide", "Le code de compte est invalide."))
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	deviceID := uuid.NewString()
 	token, tokenHash, err := auth.GenerateDeviceToken()

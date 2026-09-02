@@ -21,14 +21,39 @@ Android client (Room, offline-first, local E2EE keys)
    SQLite (modernc.org/sqlite, WAL, foreign_keys ON)
 ```
 
-## Authentication: Anonymous, Mullvad-Style
+## Authentication: Zero-Knowledge Decoupling and Anonymous Identity
 
-No email, OAuth, phone number, or password.
+No email, OAuth, phone number, or password exists in the system.
 
-- **Account code:** 100 bits of `crypto/rand` entropy, Crockford base32, displayed as `LTL-XXXXX-XXXXX-XXXXX-XXXXX`. It is shown **once** at registration; only its SHA-256 hash is stored.
-- **Device tokens:** each device registers against the account code and receives a 256-bit bearer token (stored hashed). Tokens are revocable individually.
-- **Abuse control:** registration and code-based endpoints are rate limited per client IP using an in-memory token bucket keyed by HMAC-hashed client IPs with an ephemeral per-process random pepper. Client IPs never touch permanent storage or logs.
+### Two-Tier Key Hierarchy
 
+The client generates its own master entropy on device. It decouples authentication from data encryption using distinct derivation paths:
+
+```
+Master Entropy (client-local, never transmitted)
+  |
+  +-- HKDF / KDF --> K_auth --> SHA-256(K_auth) = auth_hash (transmitted to server)
+  |
+  +-- HKDF / KDF --> K_enc  --> AES-256-GCM record encryption (client-local only)
+```
+
+1. **Authentication token ($K_{\text{auth}}$):** The client computes `auth_hash` = `SHA-256(K_auth)` and transmits this hash during registration and device addition. The server stores `auth_hash` directly in `accounts.code_hash`. The raw $K_{\text{auth}}$ and root master entropy never leave the client.
+2. **Encryption key ($K_{\text{enc}}$):** Used for AES-256-GCM record sealing. The server never observes, stores, or derives $K_{\text{enc}}$.
+
+### Zero-Knowledge Threat Boundary
+
+A compromise of server process memory, database backups, or reverse proxy traffic exposes only `auth_hash` and device tokens. Because $K_{\text{auth}}$ is cryptographically separated from $K_{\text{enc}}$, possession of `auth_hash` grants zero decryption capability over stored or in-flight records.
+
+### Backward Compatibility
+
+For existing clients and legacy workflows:
+- **Server-generated codes:** When `auth_hash` is omitted during registration, the server generates 100 bits of entropy displayed once as `LTL-XXXXX-XXXXX-XXXXX-XXXXX` (Crockford base32) and stores `SHA-256(NormalizeCode(code))`.
+- **Legacy device addition:** `POST /v1/auth/devices` accepts either `auth_hash` or `code`. Legacy display codes are normalized and hashed before matching `accounts.code_hash`.
+
+### Device Tokens and Abuse Control
+
+- **Device tokens:** Each registered device receives a 256-bit bearer token (`ltok_...`). Only its SHA-256 hash is stored. Tokens are revocable individually via `DELETE /v1/auth/devices/{id}`.
+- **Abuse control:** Credential-checking endpoints (`/v1/auth/register`, `/v1/auth/devices`) are rate limited per client IP using an in-memory token bucket keyed by HMAC-hashed client IPs under an ephemeral per-process random pepper. Client IPs never touch database storage or logs.
 ## Synchronization and End-to-End Encryption
 
 Record content is sealed on the client and opaque to this server.
