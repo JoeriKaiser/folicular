@@ -170,9 +170,9 @@ func (d *Deps) HandlePatchGrants(w http.ResponseWriter, r *http.Request) {
 			"Seul le suivi principal gère les partages."))
 		return
 	}
-	if link.Status != "active" {
+	if link.Status != "active" && link.Status != "pending" {
 		problem.Write(w, r, problem.Status(http.StatusConflict, "Lien inactif",
-			"Ce lien Duo n'est pas actif."))
+			"Ce lien Duo n'est ni actif ni en attente."))
 		return
 	}
 
