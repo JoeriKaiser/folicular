@@ -66,7 +66,7 @@ func TestMiddleware(t *testing.T) {
 	// Create an active account and valid device
 	accountID := "019832e0-0000-7000-8000-000000000001"
 	if err := q.InsertAccount(t.Context(), dbgen.InsertAccountParams{
-		ID: accountID, CodeHash: HashCode("CODE1"), CreatedAt: now, UpdatedAt: now,
+		ID: accountID, CodeHash: HashCode("CODE1"), AuthVersion: AuthVersionLegacy, CreatedAt: now, UpdatedAt: now,
 	}); err != nil {
 		t.Fatalf("insert account: %v", err)
 	}

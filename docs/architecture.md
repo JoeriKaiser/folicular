@@ -25,30 +25,38 @@ Android client (Room, offline-first, local E2EE keys)
 
 No email, OAuth, phone number, or password exists in the system.
 
-### Two-Tier Key Hierarchy
+### Two-Tier Key Hierarchy (v2)
 
-The client generates its own master entropy on device. It decouples authentication from data encryption using distinct derivation paths:
+The client generates its own 128-bit root secret on device (`LTL2-...`). It decouples authentication from data encryption using domain-separated HKDF-SHA256:
 
 ```
-Master Entropy (client-local, never transmitted)
+Root Secret (128 bits, client-local, never transmitted)
   |
-  +-- HKDF / KDF --> K_auth --> SHA-256(K_auth) = auth_hash (transmitted to server)
-  |
-  +-- HKDF / KDF --> K_enc  --> AES-256-GCM record encryption (client-local only)
+  +-- HKDF-Extract(salt="luteal/v2/salt") -> PRK_v2
+        |
+        +-- HKDF-Expand("luteal/v2/auth")   -> K_auth (sent as auth_key on register/addDevice/upgrade)
+        |                                       |
+        |                                       v
+        |                                     Server: SHA-256("folicular/v2/auth-verifier\0" || K_auth)
+        |                                       -> stored in accounts.code_hash (auth_version = 2)
+        |
+        +-- HKDF-Expand("luteal/v2/master") -> K_master (client-local only)
+              +-- HKDF-Expand("luteal/v2/record\0" || account_id)   -> K_record (AES-256-GCM 0x02)
+              +-- HKDF-Expand("luteal/v2/settings\0" || account_id) -> K_settings
 ```
 
-1. **Authentication token ($K_{\text{auth}}$):** The client computes `auth_hash` = `SHA-256(K_auth)` and transmits this hash during registration and device addition. The server stores `auth_hash` directly in `accounts.code_hash`. The raw $K_{\text{auth}}$ and root master entropy never leave the client.
-2. **Encryption key ($K_{\text{enc}}$):** Used for AES-256-GCM record sealing. The server never observes, stores, or derives $K_{\text{enc}}$.
+1. **Authentication key (`K_auth`):** The client transmits `auth_key` during `POST /v1/auth/register`, `POST /v1/auth/devices`, and `POST /v1/auth/upgrade`. The server hashes it with a domain-separated SHA-256 verifier before storing or querying `accounts.code_hash`, so a read-only database dump cannot be replayed against `/v1/auth/devices`.
+2. **Encryption key (`K_record`):** Used for AES-256-GCM record sealing (`0x02` envelopes). The server never observes, stores, or derives `root_secret`, `K_master`, or `K_record`.
 
 ### Zero-Knowledge Threat Boundary
 
-A compromise of server process memory, database backups, or reverse proxy traffic exposes only `auth_hash` and device tokens. Because $K_{\text{auth}}$ is cryptographically separated from $K_{\text{enc}}$, possession of `auth_hash` grants zero decryption capability over stored or in-flight records.
+A compromise of server process memory, database backups, or reverse proxy traffic exposes only the domain-separated verifier (in DB) or `K_auth` (in flight during registration/recovery) and device tokens. Because `K_auth` is cryptographically separated from `K_master`, possession of `K_auth` or `accounts.code_hash` grants zero decryption capability over stored or in-flight `0x02` records.
 
-### Backward Compatibility
+### Backward Compatibility and In-Place Upgrade
 
-For existing clients and legacy workflows:
-- **Server-generated codes:** When `auth_hash` is omitted during registration, the server generates 100 bits of entropy displayed once as `LTL-XXXXX-XXXXX-XXXXX-XXXXX` (Crockford base32) and stores `SHA-256(NormalizeCode(code))`.
-- **Legacy device addition:** `POST /v1/auth/devices` accepts either `auth_hash` or `code`. Legacy display codes are normalized and hashed before matching `accounts.code_hash`.
+For existing `v1` clients and accounts:
+- **Legacy v1 accounts (`auth_version = 1`):** Omitting `auth_key` during registration preserves legacy 100-bit server-minted `LTL-...` codes and `0x01` envelopes.
+- **Atomic in-place upgrade (`POST /v1/auth/upgrade`):** An authenticated `v1` device re-seals all records and settings as `0x02`, submits them with its new `auth_key` and `expected_cursor`, and atomically rotates `accounts.code_hash`, sets `auth_version = 2`, purges all legacy `0x01` rows from `sync_changes` (zero-filled via `PRAGMA secure_delete = ON`), revokes other devices, and preserves `account_id` and active Duo links.
 
 ### Device Tokens and Abuse Control
 

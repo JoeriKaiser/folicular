@@ -14,3 +14,6 @@ LIMIT ?;
 
 -- name: LatestCursor :one
 SELECT seq FROM sync_changes WHERE account_id = ? ORDER BY seq DESC LIMIT 1;
+
+-- name: DeleteSyncChangesForAccount :exec
+DELETE FROM sync_changes WHERE account_id = ?;

@@ -11,21 +11,22 @@ import (
 )
 
 const getDeviceByTokenHash = `-- name: GetDeviceByTokenHash :one
-SELECT devices.id, devices.account_id, devices.name, devices.token_hash, devices.created_at, devices.last_seen_at, devices.revoked_at, accounts.status AS account_status
+SELECT devices.id, devices.account_id, devices.name, devices.token_hash, devices.created_at, devices.last_seen_at, devices.revoked_at, accounts.status AS account_status, accounts.auth_version AS account_auth_version
 FROM devices
 JOIN accounts ON accounts.id = devices.account_id
 WHERE devices.token_hash = ?
 `
 
 type GetDeviceByTokenHashRow struct {
-	ID            string         `json:"id"`
-	AccountID     string         `json:"account_id"`
-	Name          string         `json:"name"`
-	TokenHash     []byte         `json:"token_hash"`
-	CreatedAt     string         `json:"created_at"`
-	LastSeenAt    sql.NullString `json:"last_seen_at"`
-	RevokedAt     sql.NullString `json:"revoked_at"`
-	AccountStatus string         `json:"account_status"`
+	ID                 string         `json:"id"`
+	AccountID          string         `json:"account_id"`
+	Name               string         `json:"name"`
+	TokenHash          []byte         `json:"token_hash"`
+	CreatedAt          string         `json:"created_at"`
+	LastSeenAt         sql.NullString `json:"last_seen_at"`
+	RevokedAt          sql.NullString `json:"revoked_at"`
+	AccountStatus      string         `json:"account_status"`
+	AccountAuthVersion int64          `json:"account_auth_version"`
 }
 
 func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash []byte) (GetDeviceByTokenHashRow, error) {
@@ -40,6 +41,7 @@ func (q *Queries) GetDeviceByTokenHash(ctx context.Context, tokenHash []byte) (G
 		&i.LastSeenAt,
 		&i.RevokedAt,
 		&i.AccountStatus,
+		&i.AccountAuthVersion,
 	)
 	return i, err
 }
@@ -117,6 +119,26 @@ type RevokeDeviceParams struct {
 
 func (q *Queries) RevokeDevice(ctx context.Context, arg RevokeDeviceParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, revokeDevice, arg.RevokedAt, arg.ID, arg.AccountID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const revokeOtherDevices = `-- name: RevokeOtherDevices :execrows
+UPDATE devices
+SET revoked_at = ?
+WHERE account_id = ? AND id != ? AND revoked_at IS NULL
+`
+
+type RevokeOtherDevicesParams struct {
+	RevokedAt sql.NullString `json:"revoked_at"`
+	AccountID string         `json:"account_id"`
+	ID        string         `json:"id"`
+}
+
+func (q *Queries) RevokeOtherDevices(ctx context.Context, arg RevokeOtherDevicesParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, revokeOtherDevices, arg.RevokedAt, arg.AccountID, arg.ID)
 	if err != nil {
 		return 0, err
 	}
