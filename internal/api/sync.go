@@ -78,6 +78,7 @@ const maxCiphertextBytes = 64 * 1024
 // HandleSyncPush applies a batch of client changes.
 func (d *Deps) HandleSyncPush(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := auth.AccountID(r.Context())
+	authVersion, _ := auth.AuthVersion(r.Context())
 
 	var req pushRequest
 	if !decodeJSON(w, r, &req) {
@@ -100,7 +101,7 @@ func (d *Deps) HandleSyncPush(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for i, ch := range req.Changes {
-		applied, conflict, rej := d.applyChange(r.Context(), accountID, ch)
+		applied, conflict, rej := d.applyChange(r.Context(), accountID, authVersion, ch)
 		switch {
 		case rej != nil:
 			rej.Detail = fmt.Sprintf("changes[%d]: %s", i, rej.Detail)
@@ -124,7 +125,7 @@ func (d *Deps) HandleSyncPush(w http.ResponseWriter, r *http.Request) {
 
 // validate checks the routing envelope only. The payload is ciphertext and is
 // deliberately not inspected.
-func (ch pushChange) validate() error {
+func (ch pushChange) validate(authVersion int64) error {
 	if !domain.IsEntityType(ch.EntityType) {
 		return fmt.Errorf("entity_type: type inconnu %q", ch.EntityType)
 	}
@@ -142,11 +143,17 @@ func (ch pushChange) validate() error {
 			return fmt.Errorf("updated_at: horodatage trop éloigné dans le futur (horloge décalée)")
 		}
 	}
-	if len(ch.Ciphertext) > maxCiphertextBytes {
-		return fmt.Errorf("ciphertext: au plus %d octets", maxCiphertextBytes)
+	if ch.Deleted {
+		if len(ch.Ciphertext) > maxCiphertextBytes {
+			return fmt.Errorf("ciphertext: au plus %d octets", maxCiphertextBytes)
+		}
+		return nil
 	}
-	if !ch.Deleted && len(ch.Ciphertext) == 0 {
+	if len(ch.Ciphertext) == 0 {
 		return fmt.Errorf("ciphertext: requis sauf pour une suppression")
+	}
+	if err := validateSealedEnvelope(ch.Ciphertext, authVersion); err != nil {
+		return err
 	}
 	return nil
 }
@@ -154,12 +161,12 @@ func (ch pushChange) validate() error {
 // applyChange applies one change in its own transaction: the record upsert and
 // the change-log append are atomic per change. Losing the last-write-wins guard
 // rolls back and returns the server's current sealed state.
-func (d *Deps) applyChange(ctx context.Context, accountID string, ch pushChange) (*appliedRef, *conflictRef, *rejectedRef) {
+func (d *Deps) applyChange(ctx context.Context, accountID string, authVersion int64, ch pushChange) (*appliedRef, *conflictRef, *rejectedRef) {
 	reject := func(entityID, detail string) (*appliedRef, *conflictRef, *rejectedRef) {
 		return nil, nil, &rejectedRef{EntityType: ch.EntityType, EntityID: entityID, Detail: detail}
 	}
 
-	if err := ch.validate(); err != nil {
+	if err := ch.validate(authVersion); err != nil {
 		return reject(ch.EntityID, err.Error())
 	}
 

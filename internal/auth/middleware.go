@@ -18,6 +18,7 @@ const (
 	accountIDKey ctxKey = iota
 	deviceIDKey
 	deviceNameKey
+	authVersionKey
 )
 
 // AccountID returns the authenticated account ID, if any.
@@ -35,6 +36,12 @@ func DeviceID(ctx context.Context) (string, bool) {
 // DeviceName returns the authenticated device name, if any.
 func DeviceName(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(deviceNameKey).(string)
+	return v, ok
+}
+
+// AuthVersion returns the authenticated account's protocol version (1 or 2).
+func AuthVersion(ctx context.Context) (int64, bool) {
+	v, ok := ctx.Value(authVersionKey).(int64)
 	return v, ok
 }
 
@@ -71,6 +78,7 @@ func Middleware(queries *dbgen.Queries, log *slog.Logger) func(http.Handler) htt
 			ctx := context.WithValue(r.Context(), accountIDKey, row.AccountID)
 			ctx = context.WithValue(ctx, deviceIDKey, row.ID)
 			ctx = context.WithValue(ctx, deviceNameKey, row.Name)
+			ctx = context.WithValue(ctx, authVersionKey, row.AccountAuthVersion)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

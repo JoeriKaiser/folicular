@@ -40,7 +40,37 @@ func (d *Deps) validInviteCode(code string) bool {
 	return ok
 }
 
-const maxBodyBytes = 1 << 20 // 1 MiB
+const (
+	maxBodyBytes        = 1 << 20  // 1 MiB for normal requests
+	maxUpgradeBodyBytes = 16 << 20 // 16 MiB for atomic v1 -> v2 account upgrade
+	minEnvelopeBytes    = 1 + 12 + 16
+	envelopeVersionV1   = 0x01
+	envelopeVersionV2   = 0x02
+)
+
+func expectedEnvelopeVersion(authVersion int64) byte {
+	if authVersion == auth.AuthVersionV2 {
+		return envelopeVersionV2
+	}
+	return envelopeVersionV1
+}
+
+// validateSealedEnvelope checks that a sealed payload meets minimum AES-256-GCM
+// framing (1 version byte + 12-byte nonce + 16-byte tag) and carries the
+// envelope version matching the account's auth_version.
+func validateSealedEnvelope(ciphertext []byte, authVersion int64) error {
+	if len(ciphertext) < minEnvelopeBytes {
+		return fmt.Errorf("ciphertext: enveloppe trop courte (minimum %d octets)", minEnvelopeBytes)
+	}
+	if len(ciphertext) > maxCiphertextBytes {
+		return fmt.Errorf("ciphertext: au plus %d octets", maxCiphertextBytes)
+	}
+	want := expectedEnvelopeVersion(authVersion)
+	if ciphertext[0] != want {
+		return fmt.Errorf("ciphertext: version d'enveloppe 0x%02x incompatible avec le compte (attendu 0x%02x)", ciphertext[0], want)
+	}
+	return nil
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -49,7 +79,11 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
+	return decodeJSONWithLimit(w, r, v, maxBodyBytes)
+}
+
+func decodeJSONWithLimit(w http.ResponseWriter, r *http.Request, v any, limit int64) bool {
+	dec := json.NewDecoder(io.LimitReader(r.Body, limit))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		problem.Write(w, r, problem.Status(http.StatusBadRequest, "Corps invalide",

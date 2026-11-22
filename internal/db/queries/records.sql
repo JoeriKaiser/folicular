@@ -29,3 +29,12 @@ SELECT * FROM records WHERE account_id = ? AND entity_id = ?;
 SELECT * FROM records
 WHERE account_id = ?
 ORDER BY entity_type, entity_id;
+
+-- name: DeleteRecordsForAccount :exec
+DELETE FROM records WHERE account_id = ?;
+
+-- name: InsertRecord :exec
+INSERT INTO records (
+    account_id, entity_id, entity_type, client_rev, ciphertext,
+    deleted, updated_at, recorded_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);

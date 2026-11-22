@@ -9,6 +9,15 @@ import (
 	"context"
 )
 
+const deleteRecordsForAccount = `-- name: DeleteRecordsForAccount :exec
+DELETE FROM records WHERE account_id = ?
+`
+
+func (q *Queries) DeleteRecordsForAccount(ctx context.Context, accountID string) error {
+	_, err := q.db.ExecContext(ctx, deleteRecordsForAccount, accountID)
+	return err
+}
+
 const getRecord = `-- name: GetRecord :one
 SELECT account_id, entity_id, entity_type, client_rev, ciphertext, deleted, updated_at, recorded_at FROM records WHERE account_id = ? AND entity_id = ?
 `
@@ -32,6 +41,38 @@ func (q *Queries) GetRecord(ctx context.Context, arg GetRecordParams) (Record, e
 		&i.RecordedAt,
 	)
 	return i, err
+}
+
+const insertRecord = `-- name: InsertRecord :exec
+INSERT INTO records (
+    account_id, entity_id, entity_type, client_rev, ciphertext,
+    deleted, updated_at, recorded_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertRecordParams struct {
+	AccountID  string `json:"account_id"`
+	EntityID   string `json:"entity_id"`
+	EntityType string `json:"entity_type"`
+	ClientRev  string `json:"client_rev"`
+	Ciphertext []byte `json:"ciphertext"`
+	Deleted    int64  `json:"deleted"`
+	UpdatedAt  string `json:"updated_at"`
+	RecordedAt string `json:"recorded_at"`
+}
+
+func (q *Queries) InsertRecord(ctx context.Context, arg InsertRecordParams) error {
+	_, err := q.db.ExecContext(ctx, insertRecord,
+		arg.AccountID,
+		arg.EntityID,
+		arg.EntityType,
+		arg.ClientRev,
+		arg.Ciphertext,
+		arg.Deleted,
+		arg.UpdatedAt,
+		arg.RecordedAt,
+	)
+	return err
 }
 
 const listRecordsForAccount = `-- name: ListRecordsForAccount :many

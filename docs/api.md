@@ -24,23 +24,23 @@ Conventions:
 
 ### POST /v1/auth/register
 
-Create an anonymous account and register the first device.
+Create a pseudonymous account and register the first device.
 
-Clients can register in zero-knowledge mode by supplying `auth_hash`, a hex or base64 SHA-256 hash of the client-derived authentication key $K_{\text{auth}}$. In this mode, the server never observes the account code, master secret, or record encryption key.
+Clients register in operator-blind `v2` mode by supplying `auth_key`, a 32-byte hex or base64 client-derived authentication key (`K_auth`). The server hashes `auth_key` with a domain-separated SHA-256 verifier before storing it and never observes the recovery code or encryption key (`auth_version = 2`).
 
-Alternatively, omitting `auth_hash` preserves legacy behavior: the server generates a 100-bit Crockford base32 account code, stores its SHA-256 hash, and returns the display code in `account.code`.
+Omitting `auth_key` preserves legacy `v1` behavior: the server generates a 100-bit Crockford base32 account code, stores its SHA-256 hash, and returns the display code in `account.code` (`auth_version = 1`).
 
-Zero-knowledge request:
+Operator-blind `v2` request:
 
 ```json
 {
   "device_name": "Pixel 9",
-  "auth_hash": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+  "auth_key": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
   "invite_code": "LTL-BETA-0001"
 }
 ```
 
-Legacy request (`invite_code` is required only when registration is gated; omit it when registration is open):
+Legacy `v1` request (`invite_code` is required only when registration is gated; omit it when registration is open):
 
 ```json
 {
@@ -51,28 +51,30 @@ Legacy request (`invite_code` is required only when registration is gated; omit 
 
 When registration is gated and `invite_code` is missing or invalid, the server returns a generic `401` problem.
 
-Response `201` (Zero-Knowledge):
+Response `201` (v2):
 
 ```json
 {
   "account": {
-    "id": "019832e0-6c14-7000-8000-000000000001"
+    "id": "019832e0-6c14-7000-8000-000000000001",
+    "auth_version": 2
   },
   "device": {
     "id": "019832e0-6c15-7000-8000-000000000002",
     "name": "Pixel 9",
     "token": "ltok_Ab3-..."
   },
-  "warning": "Conservez vos clés de récupération en lieu sûr : elles permettent seules de retrouver votre compte et d'ajouter des périphériques."
+  "warning": "Conservez votre code de récupération en lieu sûr : ce serveur ne l'a jamais reçu et ne peut pas le réinitialiser."
 }
 ```
 
-Response `201` (Legacy):
+Response `201` (Legacy v1):
 
 ```json
 {
   "account": {
     "id": "019832e0-6c14-7000-8000-000000000001",
+    "auth_version": 1,
     "code": "LTL-8K3FQ-Z2WNT-7HJMC-4XRDB"
   },
   "device": {
@@ -84,22 +86,20 @@ Response `201` (Legacy):
 }
 ```
 
-In legacy mode, the account `code` is shown **once**. Only its SHA-256 hash is stored. No email recovery exists.
-
 ### POST /v1/auth/devices
 
-Register an additional device using either a zero-knowledge `auth_hash` or a legacy account code. Rate limited per IP.
+Register an additional device using either a `v2` `auth_key` or a legacy `v1` account `code`. Rate limited per IP.
 
-Zero-knowledge request:
+Operator-blind `v2` request:
 
 ```json
 {
-  "auth_hash": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+  "auth_key": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
   "device_name": "Tablette"
 }
 ```
 
-Legacy request:
+Legacy `v1` request:
 
 ```json
 {
@@ -113,6 +113,7 @@ Response `201`:
 ```json
 {
   "account_id": "019832e0-6c14-7000-8000-000000000001",
+  "auth_version": 2,
   "device": {
     "id": "019832e0-6c16-7000-8000-000000000003",
     "name": "Tablette",
@@ -121,7 +122,46 @@ Response `201`:
 }
 ```
 
-Errors: `401` invalid code or auth hash (generic detail, no enumeration), `429` rate limited.
+Errors: `401` invalid credential (generic detail, no enumeration), `429` rate limited.
+
+### POST /v1/auth/upgrade
+
+Atomically upgrade an authenticated `v1` account in place to `v2` operator-blind encryption. Rotates `accounts.code_hash`, sets `auth_version = 2`, replaces all records with `0x02` envelopes, purges legacy `0x01` rows from `sync_changes`, preserves `account_id` and active Duo links, and revokes other devices by default. Idempotent if retried with the same `auth_key`.
+
+Request (up to 16 MiB):
+
+```json
+{
+  "auth_key": "7f83b1657ff1fc53b92dc18148a1d65dfc2d4b1fa3d677284addd200126d9069",
+  "expected_cursor": 412,
+  "revoke_other_devices": true,
+  "settings": "AgEX+x0f...",
+  "records": [
+    {
+      "entity_type": "cycle",
+      "entity_id": "019832e1-0000-7000-8000-000000000010",
+      "client_rev": "019832e1-1111-7000-8000-000000000011",
+      "updated_at": "2026-07-21T09:12:00Z",
+      "deleted": false,
+      "ciphertext": "AgEX+x0f..."
+    }
+  ]
+}
+```
+
+Response `200`:
+
+```json
+{
+  "account_id": "019832e0-6c14-7000-8000-000000000001",
+  "auth_version": 2,
+  "cursor": 589,
+  "records_migrated": 142,
+  "revoked_devices": 1
+}
+```
+
+Errors: `409` stale `expected_cursor` or already upgraded with a different key, `422` invalid `auth_key`, missing live record, or non-`0x02` ciphertext.
 
 ### GET /v1/auth/devices
 

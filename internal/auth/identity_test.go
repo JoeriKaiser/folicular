@@ -143,7 +143,7 @@ func TestHashInviteCode(t *testing.T) {
 	}
 }
 
-func TestParseAuthHash(t *testing.T) {
+func TestParseAuthKey(t *testing.T) {
 	raw := sha256.Sum256([]byte("client-k-auth-entropy"))
 
 	validCases := []struct {
@@ -162,12 +162,12 @@ func TestParseAuthHash(t *testing.T) {
 
 	for _, tc := range validCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ParseAuthHash(tc.input)
+			got, err := ParseAuthKey(tc.input)
 			if err != nil {
-				t.Fatalf("ParseAuthHash(%q) unexpected error: %v", tc.input, err)
+				t.Fatalf("ParseAuthKey(%q) unexpected error: %v", tc.input, err)
 			}
 			if !bytes.Equal(got, raw[:]) {
-				t.Fatalf("ParseAuthHash(%q) = %x, want %x", tc.input, got, raw)
+				t.Fatalf("ParseAuthKey(%q) = %x, want %x", tc.input, got, raw)
 			}
 		})
 	}
@@ -188,72 +188,45 @@ func TestParseAuthHash(t *testing.T) {
 
 	for _, tc := range invalidCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := ParseAuthHash(tc.input)
-			if !errors.Is(err, ErrInvalidAuthHash) {
-				t.Fatalf("ParseAuthHash(%q) error = %v, want %v", tc.input, err, ErrInvalidAuthHash)
+			_, err := ParseAuthKey(tc.input)
+			if !errors.Is(err, ErrInvalidAuthKey) {
+				t.Fatalf("ParseAuthKey(%q) error = %v, want %v", tc.input, err, ErrInvalidAuthKey)
 			}
 		})
 	}
 }
 
-func TestAuthHashMatches(t *testing.T) {
-	h1 := sha256.Sum256([]byte("hash-one"))
-	h2 := sha256.Sum256([]byte("hash-two"))
+func TestHashAuthKeyAndVerifierMatches(t *testing.T) {
+	// Cross-language domain separation check: HashAuthKey(k) must equal
+	// SHA-256("folicular/v2/auth-verifier\x00" || k) and never equal raw k.
+	k1 := bytes.Repeat([]byte{0x42}, 32)
+	k2 := bytes.Repeat([]byte{0x43}, 32)
 
-	if !AuthHashMatches(h1[:], h1[:]) {
-		t.Error("identical hashes must match")
+	v1 := HashAuthKey(k1)
+	v2 := HashAuthKey(k2)
+
+	if bytes.Equal(v1, k1) {
+		t.Fatal("verifier must not equal raw auth_key")
 	}
-	if AuthHashMatches(h1[:], h2[:]) {
-		t.Error("different hashes must not match")
+
+	h := sha256.New()
+	h.Write([]byte("folicular/v2/auth-verifier\x00"))
+	h.Write(k1)
+	want := h.Sum(nil)
+	if !bytes.Equal(v1, want) {
+		t.Fatalf("HashAuthKey mismatch: got %x, want %x", v1, want)
 	}
-	if AuthHashMatches(h1[:16], h1[:16]) {
-		t.Error("hashes shorter than 32 bytes must not match")
+
+	if !VerifierMatches(v1, want) {
+		t.Error("identical verifiers must match")
 	}
-	if AuthHashMatches(h1[:], h1[:16]) {
+	if VerifierMatches(v1, v2) {
+		t.Error("different verifiers must not match")
+	}
+	if VerifierMatches(v1[:16], v1[:16]) {
+		t.Error("verifiers shorter than 32 bytes must not match")
+	}
+	if VerifierMatches(v1, v1[:16]) {
 		t.Error("length mismatch must not match")
-	}
-}
-
-func TestLegacyVsDirectAuthTokenHandling(t *testing.T) {
-	// 1. Legacy code flow: server or client generates Crockford code, normalizes, and hashes with HashCode.
-	display, legacyStorageHash, err := GenerateAccountCode()
-	if err != nil {
-		t.Fatalf("GenerateAccountCode error: %v", err)
-	}
-	norm := NormalizeCode(display)
-	computedLegacyHash := HashCode(norm)
-	if !bytes.Equal(legacyStorageHash, computedLegacyHash) {
-		t.Fatalf("legacy storage hash mismatch")
-	}
-	if !CodeMatches(norm, legacyStorageHash) {
-		t.Fatalf("CodeMatches failed for legacy normalized code")
-	}
-	if !AuthHashMatches(computedLegacyHash, legacyStorageHash) {
-		t.Fatalf("AuthHashMatches failed for legacy hash")
-	}
-
-	// 2. Direct auth token flow: client derives K_auth, computes SHA-256(K_auth), sends hex or base64 auth_hash.
-	kAuth := []byte("client-derived-k-auth-entropy-32b!")
-	kAuthSum := sha256.Sum256(kAuth)
-	directAuthHex := hex.EncodeToString(kAuthSum[:])
-	directAuthB64 := base64.StdEncoding.EncodeToString(kAuthSum[:])
-
-	parsedHex, err := ParseAuthHash(directAuthHex)
-	if err != nil {
-		t.Fatalf("ParseAuthHash(hex) error: %v", err)
-	}
-	parsedB64, err := ParseAuthHash(directAuthB64)
-	if err != nil {
-		t.Fatalf("ParseAuthHash(base64) error: %v", err)
-	}
-
-	if !bytes.Equal(parsedHex, kAuthSum[:]) || !bytes.Equal(parsedB64, kAuthSum[:]) {
-		t.Fatalf("parsed auth hash does not match expected SHA-256(K_auth)")
-	}
-	if !AuthHashMatches(parsedHex, parsedB64) {
-		t.Fatalf("AuthHashMatches failed between parsed hex and base64 hashes")
-	}
-	if AuthHashMatches(parsedHex, legacyStorageHash) {
-		t.Fatalf("direct auth hash should not match unrelated legacy storage hash")
 	}
 }

@@ -55,15 +55,26 @@ func CodeMatches(normalized string, stored []byte) bool {
 	return subtle.ConstantTimeCompare(HashCode(normalized), stored) == 1
 }
 
-// ErrInvalidAuthHash indicates an auth_hash cannot be parsed as a 32-byte hash.
-var ErrInvalidAuthHash = errors.New("auth_hash must be a 32-byte hash in hex or base64")
+// Auth protocol versions stored in accounts.auth_version.
+const (
+	AuthVersionLegacy int64 = 1
+	AuthVersionV2     int64 = 2
+)
 
-// ParseAuthHash decodes a client-provided authentication hash.
-// It accepts 32-byte SHA-256 hashes in hex (64 chars) or base64 (standard or URL-safe, with or without padding).
-func ParseAuthHash(input string) ([]byte, error) {
+// v2AuthVerifierDomain domain-separates server-stored v2 auth verifiers from
+// legacy v1 account-code hashes so they cannot collide or impersonate each other.
+const v2AuthVerifierDomain = "folicular/v2/auth-verifier\x00"
+
+// ErrInvalidAuthKey indicates an auth_key cannot be parsed as a 32-byte key.
+var ErrInvalidAuthKey = errors.New("auth_key must be a 32-byte key in hex or base64")
+
+// ParseAuthKey decodes a client-provided 32-byte authentication key (K_auth).
+// It accepts 32 bytes encoded as hex (64 chars) or base64 (standard or URL-safe,
+// with or without padding).
+func ParseAuthKey(input string) ([]byte, error) {
 	s := strings.TrimSpace(input)
 	if s == "" {
-		return nil, ErrInvalidAuthHash
+		return nil, ErrInvalidAuthKey
 	}
 
 	if len(s) == 64 {
@@ -84,15 +95,25 @@ func ParseAuthHash(input string) ([]byte, error) {
 		}
 	}
 
-	return nil, ErrInvalidAuthHash
+	return nil, ErrInvalidAuthKey
 }
 
-// AuthHashMatches compares a client-provided auth hash against a stored hash in constant time.
-func AuthHashMatches(clientHash, stored []byte) bool {
-	if len(clientHash) != len(stored) || len(stored) != 32 {
+// HashAuthKey derives the server-stored verifier from a 32-byte client auth_key.
+// Hashing server-side ensures a read-only database leak cannot be replayed
+// against POST /v1/auth/devices (preventing pass-the-hash).
+func HashAuthKey(authKey []byte) []byte {
+	h := sha256.New()
+	h.Write([]byte(v2AuthVerifierDomain))
+	h.Write(authKey)
+	return h.Sum(nil)
+}
+
+// VerifierMatches compares two 32-byte verifiers in constant time.
+func VerifierMatches(candidate, stored []byte) bool {
+	if len(candidate) != len(stored) || len(stored) != 32 {
 		return false
 	}
-	return subtle.ConstantTimeCompare(clientHash, stored) == 1
+	return subtle.ConstantTimeCompare(candidate, stored) == 1
 }
 
 // pairingCodeSymbols is 50 bits (10 x 5-bit symbols), displayed as

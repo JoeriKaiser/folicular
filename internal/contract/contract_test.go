@@ -31,7 +31,7 @@ func TestSpecCoversCoreRoutes(t *testing.T) {
 	doc := loadSpec(t)
 	paths := []string{
 		"/healthz", "/readyz", "/version",
-		"/v1/auth/register", "/v1/auth/devices", "/v1/auth/devices/{deviceID}",
+		"/v1/auth/register", "/v1/auth/devices", "/v1/auth/devices/{deviceID}", "/v1/auth/upgrade",
 		"/v1/me",
 		"/v1/sync/push", "/v1/sync/pull",
 		"/v1/duo/invitations", "/v1/duo/links", "/v1/duo/links/{linkID}",

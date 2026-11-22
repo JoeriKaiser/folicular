@@ -9,6 +9,15 @@ import (
 	"context"
 )
 
+const deleteSyncChangesForAccount = `-- name: DeleteSyncChangesForAccount :exec
+DELETE FROM sync_changes WHERE account_id = ?
+`
+
+func (q *Queries) DeleteSyncChangesForAccount(ctx context.Context, accountID string) error {
+	_, err := q.db.ExecContext(ctx, deleteSyncChangesForAccount, accountID)
+	return err
+}
+
 const latestCursor = `-- name: LatestCursor :one
 SELECT seq FROM sync_changes WHERE account_id = ? ORDER BY seq DESC LIMIT 1
 `

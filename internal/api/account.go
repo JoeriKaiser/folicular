@@ -21,9 +21,10 @@ type meResponse struct {
 }
 
 type accountInfo struct {
-	ID        string `json:"id"`
-	Status    string `json:"status"`
-	CreatedAt string `json:"created_at"`
+	ID          string `json:"id"`
+	AuthVersion int64  `json:"auth_version"`
+	Status      string `json:"status"`
+	CreatedAt   string `json:"created_at"`
 }
 
 type deviceShort struct {
@@ -63,7 +64,7 @@ func (d *Deps) HandleMe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, meResponse{
-		Account:  accountInfo{ID: account.ID, Status: account.Status, CreatedAt: account.CreatedAt},
+		Account:  accountInfo{ID: account.ID, AuthVersion: account.AuthVersion, Status: account.Status, CreatedAt: account.CreatedAt},
 		Device:   deviceShort{ID: deviceID, Name: deviceName},
 		Settings: settingsToPayload(settings),
 	})
@@ -87,6 +88,7 @@ type patchSettingsRequest struct {
 // the whole blob.
 func (d *Deps) HandlePatchMe(w http.ResponseWriter, r *http.Request) {
 	accountID, _ := auth.AccountID(r.Context())
+	authVersion, _ := auth.AuthVersion(r.Context())
 
 	var req patchSettingsRequest
 	if !decodeJSON(w, r, &req) {
@@ -97,9 +99,9 @@ func (d *Deps) HandlePatchMe(w http.ResponseWriter, r *http.Request) {
 			"settings: requis"))
 		return
 	}
-	if len(req.Settings) > maxCiphertextBytes {
+	if err := validateSealedEnvelope(req.Settings, authVersion); err != nil {
 		problem.Write(w, r, problem.Status(http.StatusUnprocessableEntity, "Validation échouée",
-			"settings: charge utile trop volumineuse"))
+			"settings: "+err.Error()))
 		return
 	}
 
@@ -173,7 +175,7 @@ func (d *Deps) HandleExport(w http.ResponseWriter, r *http.Request) {
 		Note: "Les enregistrements sont chiffrés de bout en bout. Ce serveur ne " +
 			"peut pas les déchiffrer : utilisez votre code de compte dans " +
 			"l'application pour obtenir une version lisible.",
-		Account:  accountInfo{ID: account.ID, Status: account.Status, CreatedAt: account.CreatedAt},
+		Account:  accountInfo{ID: account.ID, AuthVersion: account.AuthVersion, Status: account.Status, CreatedAt: account.CreatedAt},
 		Settings: settingsToPayload(settings),
 		Records:  make([]exportRecord, 0, len(records)),
 	}

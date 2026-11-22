@@ -23,7 +23,7 @@ var migrationsFS embed.FS
 // queueing is transparent, and NORMAL synchronous (safe with WAL).
 func Open(path string) (*sql.DB, error) {
 	dsn := fmt.Sprintf(
-		"file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)",
+		"file:%s?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)&_pragma=secure_delete(1)",
 		path,
 	)
 	db, err := sql.Open("sqlite", dsn)

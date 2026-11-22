@@ -259,16 +259,19 @@ func TestConformance_ZeroKnowledgeAuthFlow(t *testing.T) {
 	h := newHarness(t)
 
 	kAuth := sha256.Sum256([]byte("conformance-zk-k-auth-entropy"))
-	authHashHex := hex.EncodeToString(kAuth[:])
+	authKeyHex := hex.EncodeToString(kAuth[:])
 
-	// Register with auth_hash: 201, validates RegisterResponse schema without account.code
+	// Register with auth_key: 201, validates RegisterResponse schema without account.code
 	reg := h.do("POST", "/v1/auth/register", map[string]any{
 		"device_name": "zk-phone",
-		"auth_hash":   authHashHex,
+		"auth_key":    authKeyHex,
 	}, 201)
 	acct, ok := reg["account"].(map[string]any)
 	if !ok || acct["id"] == nil || acct["id"] == "" {
 		t.Fatalf("expected account.id in response: %v", reg)
+	}
+	if acct["auth_version"] != float64(2) {
+		t.Fatalf("expected auth_version=2, got %v", acct["auth_version"])
 	}
 	if acct["code"] != nil && acct["code"] != "" {
 		t.Fatalf("expected account.code to be omitted in ZK auth response: %v", acct["code"])
@@ -278,18 +281,39 @@ func TestConformance_ZeroKnowledgeAuthFlow(t *testing.T) {
 		t.Fatalf("expected device.token in response: %v", reg)
 	}
 
-	// Add device with auth_hash: 201, validates addDevice response schema
+	// Add device with auth_key: 201, validates addDevice response schema
 	add := h.do("POST", "/v1/auth/devices", map[string]any{
 		"device_name": "zk-laptop",
-		"auth_hash":   authHashHex,
+		"auth_key":    authKeyHex,
 	}, 201)
 	if add["account_id"] != acct["id"] {
 		t.Fatalf("expected account_id %v, got %v", acct["id"], add["account_id"])
+	}
+	if add["auth_version"] != float64(2) {
+		t.Fatalf("expected auth_version=2, got %v", add["auth_version"])
 	}
 	dev2, ok := add["device"].(map[string]any)
 	if !ok || dev2["token"] == nil || dev2["token"] == "" {
 		t.Fatalf("expected device.token in add response: %v", add)
 	}
+}
+
+func TestConformance_AccountUpgrade(t *testing.T) {
+	h := newHarness(t)
+
+	reg := h.do("POST", "/v1/auth/register", map[string]any{"device_name": "v1-phone"}, 201)
+	h.token = reg["device"].(map[string]any)["token"].(string)
+
+	kAuth := sha256.Sum256([]byte("conformance-upgrade-k-auth"))
+	up := h.do("POST", "/v1/auth/upgrade", map[string]any{
+		"auth_key":        hex.EncodeToString(kAuth[:]),
+		"expected_cursor": 0,
+		"records":         []map[string]any{},
+	}, 200)
+	if up["auth_version"] != float64(2) {
+		t.Fatalf("expected auth_version=2, got %v", up["auth_version"])
+	}
+	h.do("GET", "/v1/me", nil, 200)
 }
 
 // sealedBlob returns a base64 payload shaped like a real sealed record:

@@ -53,6 +53,7 @@ func NewRouter(log *slog.Logger, q *dbgen.Queries, db *sql.DB, version, pairingB
 				r.Use(auth.Middleware(q, log))
 				r.Get("/devices", deps.HandleListDevices)
 				r.Delete("/devices/{deviceID}", deps.HandleRevokeDevice)
+				r.Post("/upgrade", deps.HandleUpgrade)
 			})
 		})
 
